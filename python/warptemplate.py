@@ -1,4 +1,9 @@
+import os
 import re
+import pickle
+import random
+import logging
+from typing import List, Dict, Union, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -55,6 +60,7 @@ class WarpedTimeSeriesSource( TimeSeriesSource ):
 
     def __init__(self, phase, wave, flux, 
                  original_template_name, original_template_version=None,
+                 cut_negative_flux=True,
                  time_spline_degree=3, name=None, version=None):
         
         self.name = name
@@ -78,11 +84,15 @@ class WarpedTimeSeriesSource( TimeSeriesSource ):
                 ( self._original_source._wave <= max(wave) )
                  )
         ]
-        # COrrected flux
+        # Corrected flux
         flux = ( 
             self._original_source._flux( self._phase, self._wave ) *
             self._warp_spline( self._phase, self._wave )
         )
+        if cut_negative_flux:
+            flux[flux<0] = 0
+
+
         self._model_flux = Spline2d(self._phase, self._wave, flux, 
                                     kx=time_spline_degree, ky=3)
 
@@ -181,7 +191,7 @@ def get_template_correction(
     """
 
     if max_phases is None:
-        max_phases = [-20.,50.]
+        max_phases = [-20.,100.]
 
 
     # Fit template 
@@ -218,6 +228,7 @@ def get_template_correction(
         )
 
         # Look for mag outliers in flux
+        # Well, if we start far away we will cut away the real data to look like the model 
         result, fitted_model = sncosmo.fit_lc(
                 tab[iGood], fitted_model,
                 fitprop
@@ -300,9 +311,24 @@ def get_template_correction(
         rest_wave = bandfunc.wave_eff / (1+z)
         # Add limits to ensure correction goes to 1 at edges if so set
         if not require_phasecoverage:
-            band_phase = [startphase, *band_phase, endphase]
-            band_corr = [1, *band_corr, 1]
-            band_err = [0.01, *band_err, 0.01]
+            # Add inital cadenced buffer starting at startphase and ending at first phase point, and same at end.
+            buffercadence = 3.
+            pre_phases = np.arange( startphase, min(band_phase), buffercadence )
+            if len(pre_phases)==0:
+                pre_phases = [startphase]
+            post_phases = np.arange( max(band_phase)+buffercadence, endphase, buffercadence )
+            if len(post_phases)==0:
+                post_phases = [endphase]
+
+            pre_err = np.linspace(0.01, band_err[0], len(pre_phases))
+            post_err = np.linspace(band_err[-1], 0.01, len(post_phases))
+
+            band_phase = [*pre_phases, *band_phase, *post_phases]
+            band_corr = [1]*len(pre_phases) + band_corr + [1]*len(post_phases)
+            band_err = list(pre_err) + band_err + list(post_err)
+#            band_phase = [startphase, *band_phase, endphase]
+#            band_corr = [1, *band_corr, 1]
+#            band_err = [0.01, *band_err, 0.01]
 
         # Interpolate to model phases
         if len(band_phase)<5:
@@ -320,6 +346,7 @@ def get_template_correction(
         ]
 
         finterp = spl(tphase)
+
 
         mdict['corrdata'][band] = {
             'wave': rest_wave, 'phase': band_phase, 
@@ -385,3 +412,195 @@ def get_template_correction(
         plt.close(fig)
         
     return mdict
+
+
+
+class WarpfitTemplateLoader:
+    def __init__(
+        self,
+        warpcoeffs_dir: str,
+        logger: Optional[logging.Logger] = None
+    ):
+        self.warpcoeffs_dir = warpcoeffs_dir
+        self._cache: Dict[str, list] = {}
+
+        if logger is None:
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s [%(levelname)s] %(message)s"
+            )
+            self.logger = logging.getLogger(__name__)
+        else:
+            self.logger = logger
+
+    # -------------------------
+    # Internal: load with cache
+    # -------------------------
+    def _load_coeffs(self, fitclass: str) -> list:
+        key = re.sub(r"/", "", fitclass)
+
+        if key in self._cache:
+            self.logger.debug(f"Cache hit for fitclass={key}")
+            return self._cache[key]
+
+        filepath = os.path.join(
+            self.warpcoeffs_dir,
+            f"warpcoeffs_{key}.pkl"
+        )
+
+        self.logger.info(f"Loading warpcoeffs from {filepath}")
+
+        if not os.path.exists(filepath):
+            self.logger.error(f"File not found: {filepath}")
+            raise FileNotFoundError(filepath)
+
+        with open(filepath, "rb") as f:
+            data = pickle.load(f)
+
+        self._cache[key] = data
+        return data
+
+    def get_templates(
+        self,
+        fitclass: str,
+        exclude_input: Optional[list] = None,
+        template_selection: Union[int, str] = 1,
+        snbasis_selection: Union[int, str] = 1,
+        require_good_templatefit: bool = False,
+        random_seed: Optional[int] = None,   # <-- NEW
+    ) -> List[Dict]:
+    
+        exclude_input = exclude_input or []
+    
+        # -------------------------
+        # Local RNG (reproducible)
+        # -------------------------
+        rng = random.Random(random_seed)
+    
+        if random_seed is not None:
+            self.logger.info(f"Using random seed: {random_seed}")
+    
+        template_collection = self._load_coeffs(fitclass)
+    
+        # -------------------------
+        # Filter SN bases
+        # -------------------------
+        valid_snbases = []
+        for sndict in template_collection:
+    
+            sn_name = sndict.get("ztfid")
+    
+            if sn_name in exclude_input:
+                self.logger.debug(f"Excluded SN basis: {sn_name}")
+                continue
+    
+            if require_good_templatefit and not sndict.get("good_fit", False):
+                self.logger.debug(f"Rejected (bad fit): {sn_name}")
+                continue
+    
+            valid_snbases.append(sndict)
+    
+        if not valid_snbases:
+            self.logger.warning("No valid SN bases after filtering")
+            return []
+    
+        self.logger.info(f"{len(valid_snbases)} SN bases available after filtering")
+    
+        # -------------------------
+        # Select SN bases
+        # -------------------------
+        if snbasis_selection == "all":
+            selected_snbases = valid_snbases
+    
+        elif isinstance(snbasis_selection, int):
+            selected_snbases = rng.choices(
+                valid_snbases,
+                k=snbasis_selection
+            )
+    
+        else:
+            raise ValueError("snbasis_selection must be int or 'all'")
+    
+        results = []
+    
+        # -------------------------
+        # Loop SN bases
+        # -------------------------
+        for sndict in selected_snbases:
+            sn_name = sndict["ztfid"]
+    
+            possible_templates = []
+    
+            for warpfit in sndict["warpmodels"]:
+    
+                template_sn = warpfit.get("model")
+    
+                if template_sn in exclude_input:
+                    self.logger.debug(
+                        f"Excluded template {template_sn} (basis {sn_name})"
+                    )
+                    continue
+    
+                try:
+                    model = get_warpedTimeSeriesModel(
+                        name=f"{sn_name}_{template_sn or 'tpl'}",
+                        original_template_name=template_sn,
+                        warpdata=warpfit["mdict"],
+                        z=float(warpfit["z"]),
+                        original_template_version=None,
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Model construction failed for {sn_name}: {e}"
+                    )
+                    continue
+    
+                possible_templates.append({
+                    "basis_sn": sn_name,
+                    "model": model,
+                    "template_prob": warpfit["draw_prob"],
+                })
+    
+            if not possible_templates:
+                self.logger.debug(f"No valid templates for SN {sn_name}")
+                continue
+    
+            # -------------------------
+            # Template selection
+            # -------------------------
+            if template_selection == "all":
+                selected_templates = possible_templates
+    
+            elif isinstance(template_selection, int):
+    
+                if template_selection > 0:
+                    weights = [tpl["template_prob"] for tpl in possible_templates]
+    
+                    selected_templates = rng.choices(
+                        possible_templates,
+                        weights=weights,
+                        k=template_selection
+                    )
+        
+                else:
+                    selected_templates = rng.choices(
+                        possible_templates,
+                        k=abs(template_selection)
+                    )
+    
+            else:
+                raise ValueError("template_selection must be int or 'all'")
+    
+            results.extend(selected_templates)
+    
+        self.logger.info(f"Returning {len(results)} templates")
+    
+        return results
+
+    # -------------------------
+    # Optional: cache control
+    # -------------------------
+    def clear_cache(self):
+        self.logger.info("Clearing warpcoeff cache")
+        self._cache.clear()
+
