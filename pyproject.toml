@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warpTemplate"
+version = "0.1.0"
+description = "Warped SN time series templates and correction models for sncosmo."
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+keywords = ["supernova", "sncosmo", "time series", "templates", "warp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "astropy>=5.1",
+    "sncosmo>=2.0",
+    "matplotlib>=3.7"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
