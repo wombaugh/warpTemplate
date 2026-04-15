@@ -23,6 +23,8 @@ def get_warpedTimeSeriesModel(
     version: Optional[str] = None,
     use_host_dust: bool = True,
     use_mw_dust: bool = False,
+    ebv_meancol_corr=0,
+    ebv_meancol_rv=3.1,
 ) -> sncosmo.Model:
     """
     Create a `sncosmo.Model` using a warped TimeSeriesSource with optional
@@ -61,6 +63,9 @@ def get_warpedTimeSeriesModel(
         Whether to include host galaxy dust (rest frame).
     use_mw_dust : bool, optional (default=False)
         Whether to include Milky Way dust (observer frame).
+    ebv_meancol_corr : float, optional (default=0)
+        If non-zero, apply a color warping to ensure the color at peak matches the sample mean. 
+    ebv_meancol_rv : float, optional (default=3.1)
 
     Returns
     -------
@@ -128,6 +133,13 @@ def get_warpedTimeSeriesModel(
         effect_names.append("mw")
         effect_frames.append("obs")
 
+    # Apply mean color warping if requested
+    if ebv_meancol_corr != 0:
+        ccm_colcorr = sncosmo.CCM89Dust()
+        effects.append(ccm_colcorr)
+        effect_names.append("colcorr")
+        effect_frames.append("rest")
+
     # ---- Build model ----
     if effects:
         model = sncosmo.Model(
@@ -151,5 +163,9 @@ def get_warpedTimeSeriesModel(
     if use_mw_dust:
         model.set(mwebv=mwebv)
         model.set(mwr_v=mwr_v)
+
+    if ebv_meancol_corr != 0:
+        model.set(colcorrebv=ebv_meancol_corr)
+        model.set(colcorrr_v=ebv_meancol_rv)
 
     return model

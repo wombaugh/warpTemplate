@@ -84,7 +84,8 @@ class WarpfitTemplateLoader:
         ----------
         fitclass : str
             Identifier used to construct filename:
-                warpcoeffs_<fitclass>.pkl
+                warpcoeffs_<fitclass>_col.pkl
+                _col suffix indicates that the file contains color correction data (ebv_meancol_corr)
 
         Returns
         -------
@@ -104,7 +105,7 @@ class WarpfitTemplateLoader:
 
         filepath = os.path.join(
             self.warpcoeffs_dir,
-            f"warpcoeffs_{key}.pkl"
+            f"warpcoeffs_{key}_col.pkl"
         )
 
         self.logger.info(f"Loading warpcoeffs from {filepath}")
@@ -127,6 +128,7 @@ class WarpfitTemplateLoader:
         snbasis_selection: Union[int, str] = 1,
         require_good_templatefit: bool = False,
         random_seed: Optional[int] = None,
+        harmonize_colors: bool = False,
     ) -> List[Dict]:
         """
         Load, filter, and sample warped templates as `sncosmo.Model` objects.
@@ -163,6 +165,10 @@ class WarpfitTemplateLoader:
 
         random_seed : int, optional
             Seed for reproducible random sampling.
+
+        harmonize_colors : bool, optional (default=False)  
+            If True, apply MW like color warping to ensure color at peak matches the ZTF sample mean.
+            Use if you wish to add color scatter separately.
 
         Returns
         -------
@@ -259,6 +265,17 @@ class WarpfitTemplateLoader:
                     )
                     continue
 
+                if harmonize_colors:
+                    # Check that we have the necessary data to apply color warping
+                    if not 'ebv_meancol_corr' in warpfit or not warpfit['ebv_meancol_corr']>-99:
+                        self.logger.warning(
+                            f"Cannot harmonize colors for {template_sn} (basis {sn_name}) - missing 'ebv_meancol_corr'"
+                        )
+                        continue
+                    ebv_meancol_corr = warpfit['ebv_meancol_corr']
+                else:
+                    ebv_meancol_corr = 0
+
                 try:
                     model = get_warpedTimeSeriesModel(
                         name=f"{sn_name}_{template_sn or 'tpl'}",
@@ -266,6 +283,8 @@ class WarpfitTemplateLoader:
                         warpdata=warpfit["mdict"],
                         z=float(warpfit["z"]),
                         original_template_version=None,
+                        ebv_meancol_corr=ebv_meancol_corr,
+                        ebv_meancol_rv=3.1,
                     )
                 except Exception as e:
                     self.logger.error(
