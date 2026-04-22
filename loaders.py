@@ -5,6 +5,8 @@ import logging
 import re
 import random
 from typing import Optional, Union, List, Dict
+import numpy as np
+from scipy.stats import exponnorm
 from .models import get_warpedTimeSeriesModel
 
 class WarpfitTemplateLoader:
@@ -39,6 +41,15 @@ class WarpfitTemplateLoader:
             {
                 "ztfid": str,              # SN identifier
                 "good_fit": bool,          # quality flag
+                "model_colors": dict    # Fit parameters of the original template fit (e.g. for color harmonization)
+                    {
+                        'K': 0.9079106174117336,
+                        'loc': 0.1250977286061127,
+                        'scale': 0.1514897618587996,
+                        'color1': 'ztfg',
+                        'color2': 'ztfr',
+                        'ebv_corr_func': [-0.0001, 0.01, 0.5]  # polynomial coefficients to map from drawn color to E(B-V) correction
+                    },
                 "warpmodels": [
                     {
                         "model": str,      # template name
@@ -105,7 +116,7 @@ class WarpfitTemplateLoader:
 
         filepath = os.path.join(
             self.warpcoeffs_dir,
-            f"warpcoeffs_{key}_col.pkl"
+            f"warpcoeffs_{key}_distinfo.pkl"
         )
 
         self.logger.info(f"Loading warpcoeffs from {filepath}")
@@ -128,7 +139,7 @@ class WarpfitTemplateLoader:
         snbasis_selection: Union[int, str] = 1,
         require_good_templatefit: bool = False,
         random_seed: Optional[int] = None,
-        harmonize_colors: bool = False,
+        color_mode: Optional[str] = None,
     ) -> List[Dict]:
         """
         Load, filter, and sample warped templates as `sncosmo.Model` objects.
@@ -166,9 +177,9 @@ class WarpfitTemplateLoader:
         random_seed : int, optional
             Seed for reproducible random sampling.
 
-        harmonize_colors : bool, optional (default=False)  
-            If True, apply MW like color warping to ensure color at peak matches the ZTF sample mean.
-            Use if you wish to add color scatter separately.
+        color_mode: str, optional (default="none")
+            If "harmonize", apply a color warping to ensure the color at peak matches the ZTF sample mean.
+            If "draw", draw a peak color from the distribution of observed colors in the ZTF sample and apply as a warping correction.
 
         Returns
         -------
@@ -179,6 +190,7 @@ class WarpfitTemplateLoader:
                 "basis_sn": str,              # SN basis name
                 "model": sncosmo.Model,      # constructed warped model
                 "template_prob": float       # original sampling weight
+                "model_colors": dict             # Fit parameters of the original template fit (e.g. for color harmonization)
             }
 
         Notes
@@ -253,6 +265,20 @@ class WarpfitTemplateLoader:
         for sndict in selected_snbases:
             sn_name = sndict["ztfid"]
 
+            # Potentially load generator for color values
+            if color_mode == "draw":
+                if 'model_colors' not in sndict:
+                    self.logger.warning(
+                        f"Cannot draw model peak color for {sn_name} - missing 'model_colors'"
+                    )
+                    continue
+                K, loc, scale = sndict['model_colors']['K'], sndict['model_colors']['loc'], sndict['model_colors']['scale']
+                # Create an instance of the EMG distribution with the given parameters
+                col_generator = exponnorm(K, loc, scale)
+                # Polynomial coefficients to map from the color drawn from sample distribution to the E(B-V) to apply
+                col_poly = np.poly1d(sndict['model_colors']['ebv_corr_func'])
+
+
             possible_templates = []
 
             for warpfit in sndict["warpmodels"]:
@@ -265,16 +291,24 @@ class WarpfitTemplateLoader:
                     )
                     continue
 
-                if harmonize_colors:
+                if color_mode == "harmonize":
+                    # Harmonize colors by applying a warping correction to match the sample mean color at peak
                     # Check that we have the necessary data to apply color warping
-                    if not 'ebv_meancol_corr' in warpfit or not warpfit['ebv_meancol_corr']>-99:
+                    if 'model_colors' not in sndict:
                         self.logger.warning(
-                            f"Cannot harmonize colors for {template_sn} (basis {sn_name}) - missing 'ebv_meancol_corr'"
+                            f"Cannot harmonize colors for {template_sn} (basis {sn_name}) - missing model_colors"
                         )
                         continue
-                    ebv_meancol_corr = warpfit['ebv_meancol_corr']
+                    # This is the MW-like color such that if applied to this template, the color at peak would match the sample mean
+                    samplecorr_ebv = sndict['model_colors']['loc']
+                elif color_mode == "draw":
+
+                    # Draw a random color corresponding to the original sample
+                    drawn_color = col_generator.rvs(random_state=rng.randint(0,1000))
+                    # Convert the drawn color to an E(B-V) warping correction using the provided polynomial
+                    samplecorr_ebv = col_poly(drawn_color)
                 else:
-                    ebv_meancol_corr = 0
+                    samplecorr_ebv = None
 
                 try:
                     model = get_warpedTimeSeriesModel(
@@ -283,8 +317,9 @@ class WarpfitTemplateLoader:
                         warpdata=warpfit["mdict"],
                         z=float(warpfit["z"]),
                         original_template_version=None,
-                        ebv_meancol_corr=ebv_meancol_corr,
-                        ebv_meancol_rv=3.1,
+                        samplecorr_ebv=samplecorr_ebv,
+                        samplecorr_rv=3.1,
+                        samplecorr_bands=['ztfg', 'ztfr'],
                     )
                 except Exception as e:
                     self.logger.error(

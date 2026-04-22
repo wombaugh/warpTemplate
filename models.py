@@ -23,8 +23,9 @@ def get_warpedTimeSeriesModel(
     version: Optional[str] = None,
     use_host_dust: bool = True,
     use_mw_dust: bool = False,
-    ebv_meancol_corr=0,
-    ebv_meancol_rv=3.1,
+    samplecorr_ebv=None,
+    samplecorr_rv=3.1,
+    samplecorr_bands=None,
 ) -> sncosmo.Model:
     """
     Create a `sncosmo.Model` using a warped TimeSeriesSource with optional
@@ -63,9 +64,13 @@ def get_warpedTimeSeriesModel(
         Whether to include host galaxy dust (rest frame).
     use_mw_dust : bool, optional (default=False)
         Whether to include Milky Way dust (observer frame).
-    ebv_meancol_corr : float, optional (default=0)
-        If non-zero, apply a color warping to ensure the color at peak matches the sample mean. 
-    ebv_meancol_rv : float, optional (default=3.1)
+    samplecorr_ebv : float, optional
+        E(B−V) value to apply to adjust template to original sample properties.
+        The base template peak color is subtracted from this value to normalize (see warpcoeff_distcolcorr study)
+    samplecorr_rv : float, optional (default=3.1)
+        R_V value to use for the distance correction if `distcorr_ebv` is
+    samplecorr_bands : list of str, optional
+        List of band names to use for calculating the color correction
 
     Returns
     -------
@@ -111,7 +116,7 @@ def get_warpedTimeSeriesModel(
         version=version,
     )
 
-    # ---- Configure dust effects ----
+    # ---- Configure dust / reddening / extinction effects ----
     effects = []
     effect_names = []
     effect_frames = []
@@ -134,11 +139,13 @@ def get_warpedTimeSeriesModel(
         effect_frames.append("obs")
 
     # Apply mean color warping if requested
-    if ebv_meancol_corr != 0:
+    if samplecorr_ebv is not None:
         ccm_colcorr = sncosmo.CCM89Dust()
         effects.append(ccm_colcorr)
-        effect_names.append("colcorr")
+        effect_names.append("samplecorr")
         effect_frames.append("rest")
+        # Calculate peak color for normalization
+        samplecorr_offset = warped_source.bandmag(samplecorr_bands[0], "ab", 0) - warped_source.bandmag(samplecorr_bands[1], "ab", 0)
 
     # ---- Build model ----
     if effects:
@@ -164,8 +171,8 @@ def get_warpedTimeSeriesModel(
         model.set(mwebv=mwebv)
         model.set(mwr_v=mwr_v)
 
-    if ebv_meancol_corr != 0:
-        model.set(colcorrebv=ebv_meancol_corr)
-        model.set(colcorrr_v=ebv_meancol_rv)
+    if samplecorr_ebv is not None:
+        model.set(samplecorrebv=samplecorr_ebv-samplecorr_offset)
+        model.set(samplecorrr_v=samplecorr_rv)
 
     return model
