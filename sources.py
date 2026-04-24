@@ -4,6 +4,7 @@ import sncosmo
 from scipy.interpolate import RectBivariateSpline as Spline2d
 
 from sncosmo import TimeSeriesSource
+import extinction
 
 import numpy.typing as npt
 from typing import List, Dict, Union, Optional
@@ -35,6 +36,10 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         If True, negative flux values after warping are set to zero.
     time_spline_degree : int, optional (default=3)
         Degree of the spline interpolation in the phase dimension.
+    warp_reddening_ebv: float, optional
+        If provided, applies a reddening correction to the warp function using the specified E(B-V)
+    warp_reddening_rv: float (default=3.1)
+        R_V value to use for the reddening correction if `warp_reddening_ebv` is provided.
     name : str, optional
         Name of this warped source.
     version : str, optional
@@ -50,6 +55,8 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         original_template_version: Optional[str] = None,
         cut_negative_flux: bool = True,
         time_spline_degree: int = 3,
+        warp_reddening_ebv: Optional[float] = None,
+        warp_reddening_rv: float = 3.1,
         name: Optional[str] = None,
         version: Optional[str] = None,
     ) -> None:
@@ -108,6 +115,14 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         )
 
         warped_flux: npt.NDArray[np.float64] = original_flux * warp_factor
+
+        # Apply optional reddening correction to the warp factor
+        if warp_reddening_ebv is not None:
+
+            warped_flux = extinction.apply(
+                extinction.ccm89(self._wave, warp_reddening_ebv * warp_reddening_rv, warp_reddening_rv), 
+                warped_flux
+                )
 
         # Clip negative values if requested
         if cut_negative_flux:

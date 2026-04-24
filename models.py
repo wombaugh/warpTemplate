@@ -104,6 +104,7 @@ def get_warpedTimeSeriesModel(
             f"flux.shape={flux.shape}, expected ({phase.size}, {wave.size})"
         )
 
+
     # ---- Create warped source ----
     warped_source = WarpedTimeSeriesSource(
         phase=phase,
@@ -112,6 +113,8 @@ def get_warpedTimeSeriesModel(
         original_template_name=original_template_name,
         original_template_version=original_template_version,
         time_spline_degree=3,
+        warp_reddening_ebv=samplecorr_ebv,
+        warp_reddening_rv=samplecorr_rv,
         name=name,
         version=version,
     )
@@ -139,13 +142,13 @@ def get_warpedTimeSeriesModel(
         effect_frames.append("obs")
 
     # Apply mean color warping if requested
-    if samplecorr_ebv is not None:
-        ccm_colcorr = sncosmo.CCM89Dust()
-        effects.append(ccm_colcorr)
-        effect_names.append("samplecorr")
-        effect_frames.append("rest")
-        # Calculate peak color for normalization
-        samplecorr_offset = warped_source.bandmag(samplecorr_bands[0], "ab", 0) - warped_source.bandmag(samplecorr_bands[1], "ab", 0)
+    #if samplecorr_ebv is not None:
+    #    ccm_colcorr = sncosmo.CCM89Dust()
+    #    effects.append(ccm_colcorr)
+    #    effect_names.append("samplecorr")
+    #    effect_frames.append("rest")
+    #    # Calculate peak color for normalization
+    #    samplecorr_offset = warped_source.bandmag(samplecorr_bands[0], "ab", 0) - warped_source.bandmag(samplecorr_bands[1], "ab", 0)
 
     # ---- Build model ----
     if effects:
@@ -171,8 +174,8 @@ def get_warpedTimeSeriesModel(
         model.set(mwebv=mwebv)
         model.set(mwr_v=mwr_v)
 
-    if samplecorr_ebv is not None:
-        model.set(samplecorrebv=samplecorr_ebv-samplecorr_offset)
-        model.set(samplecorrr_v=samplecorr_rv)
+    #if samplecorr_ebv is not None:
+    #    model.set(samplecorrebv=samplecorr_ebv-samplecorr_offset)
+    #    model.set(samplecorrr_v=samplecorr_rv)
 
     return model
