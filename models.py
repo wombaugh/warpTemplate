@@ -104,6 +104,24 @@ def get_warpedTimeSeriesModel(
             f"flux.shape={flux.shape}, expected ({phase.size}, {wave.size})"
         )
 
+    # Determine mean color warping to add if requested
+    if samplecorr_ebv is not None:
+        # We neeed to color of the base template to calculate the necessary correction
+        # Should have been calculated during the warp coefficient fitting and stored in the warpdata, but we can also calculate it here if needed
+        # ---- Create warped source ----
+        testsource = WarpedTimeSeriesSource(
+            phase=phase,
+            wave=wave,
+            flux=flux,
+            original_template_name=original_template_name,
+            original_template_version=original_template_version,
+            time_spline_degree=3,
+        )
+        samplecorr_offset = testsource.bandmag(samplecorr_bands[0], "ab", 0) - testsource.bandmag(samplecorr_bands[1], "ab", 0)
+        correction_ebv=samplecorr_ebv-samplecorr_offset
+    else:
+        correction_ebv = None
+
 
     # ---- Create warped source ----
     warped_source = WarpedTimeSeriesSource(
@@ -113,7 +131,7 @@ def get_warpedTimeSeriesModel(
         original_template_name=original_template_name,
         original_template_version=original_template_version,
         time_spline_degree=3,
-        warp_reddening_ebv=samplecorr_ebv,
+        warp_reddening_ebv=correction_ebv,
         warp_reddening_rv=samplecorr_rv,
         name=name,
         version=version,
