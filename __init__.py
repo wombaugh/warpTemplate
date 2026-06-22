@@ -4,6 +4,7 @@ from .models import get_warpedTimeSeriesModel
 from .loaders import WarpfitTemplateLoader
 from .corrections import get_template_correction
 from .types import TemplateCorrectionResult, FitLCResult
+from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES
 
 __all__ = [
     "WarpedTimeSeriesSource",
@@ -12,4 +13,5 @@ __all__ = [
     "get_template_correction",
     "TemplateCorrectionResult",
     "FitLCResult",
+    "add_warpclasses",
 ]

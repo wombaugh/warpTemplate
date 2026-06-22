@@ -66,7 +66,7 @@ def get_warpedTimeSeriesModel(
         Whether to include Milky Way dust (observer frame).
     samplecorr_ebv : float, optional
         E(B−V) value to apply to adjust template to original sample properties.
-        The base template peak color is subtracted from this value to normalize (see warpcoeff_distcolcorr study)
+        The base template peak color is *not* subtracted from this value to normalize (see warpcoeff_distcolcorr study)
     samplecorr_rv : float, optional (default=3.1)
         R_V value to use for the distance correction if `distcorr_ebv` is
     samplecorr_bands : list of str, optional
@@ -105,22 +105,22 @@ def get_warpedTimeSeriesModel(
         )
 
     # Determine mean color warping to add if requested
-    if samplecorr_ebv is not None:
-        # We neeed to color of the base template to calculate the necessary correction
-        # Should have been calculated during the warp coefficient fitting and stored in the warpdata, but we can also calculate it here if needed
-        # ---- Create warped source ----
-        testsource = WarpedTimeSeriesSource(
-            phase=phase,
-            wave=wave,
-            flux=flux,
-            original_template_name=original_template_name,
-            original_template_version=original_template_version,
-            time_spline_degree=3,
-        )
-        samplecorr_offset = testsource.bandmag(samplecorr_bands[0], "ab", 0) - testsource.bandmag(samplecorr_bands[1], "ab", 0)
-        correction_ebv=samplecorr_ebv-samplecorr_offset
-    else:
-        correction_ebv = None
+    #if samplecorr_ebv is not None:
+    #    # We neeed to color of the base template to calculate the necessary correction
+    #    # Should have been calculated during the warp coefficient fitting and stored in the warpdata, but we can also calculate it here if needed
+    #    # ---- Create warped source ----
+    #    testsource = WarpedTimeSeriesSource(
+    #        phase=phase,
+    #        wave=wave,
+    #        flux=flux,
+    #        original_template_name=original_template_name,
+    #        original_template_version=original_template_version,
+    #        time_spline_degree=3,
+    #    )
+    #    samplecorr_offset = testsource.bandmag(samplecorr_bands[0], "ab", 0) - testsource.bandmag(samplecorr_bands[1], "ab", 0)
+    #    correction_ebv=samplecorr_ebv-samplecorr_offset
+    #else:
+    #    correction_ebv = None
 
 
     # ---- Create warped source ----
@@ -131,7 +131,7 @@ def get_warpedTimeSeriesModel(
         original_template_name=original_template_name,
         original_template_version=original_template_version,
         time_spline_degree=3,
-        warp_reddening_ebv=correction_ebv,
+        warp_reddening_ebv=samplecorr_ebv,
         warp_reddening_rv=samplecorr_rv,
         name=name,
         version=version,

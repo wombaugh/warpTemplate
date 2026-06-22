@@ -35,12 +35,17 @@ class WarpfitTemplateLoader:
     -----
     The expected structure of each `.pkl` file is:
 
-        List[Dict] where each dict corresponds to a "basis SN":
-
-        [
+        snbasisname[List[Dict]] where each inner Dict corresponds to fit information for a template:
             {
-                "ztfid": str,              # SN identifier
-                "good_fit": bool,          # quality flag
+                "id": str,              # SN identifier 
+                "model": str,           # template name
+                "z": float,              # redshift
+                "quality": str,          # quality flag: 
+                                            "gold": both raw and warp model lc goodfit & original template type compatible
+                                            "silver": warped fit good + compatible with original template type, raw lc poor
+                                            "bronze": above not fulfilled, but fit acceptable
+                "draw_prob": float,# sampling weight
+                "type": str,          # original type
                 "model_colors": dict    # Fit parameters of the original template fit (e.g. for color harmonization)
                     {
                         'K': 0.9079106174117336,
@@ -50,18 +55,8 @@ class WarpfitTemplateLoader:
                         'color2': 'ztfr',
                         'ebv_corr_func': [-0.0001, 0.01, 0.5]  # polynomial coefficients to map from drawn color to E(B-V) correction
                     },
-                "warpmodels": [
-                    {
-                        "model": str,      # template name
-                        "z": float,        # redshift
-                        "draw_prob": float,# sampling weight
-                        "mdict": dict      # warpdata (see below)
-                    },
-                    ...
-                ]
+                "mdict": dict      # warpdata (see below)
             },
-            ...
-        ]
 
     Each `mdict` must match the expected input of
     `get_warpedTimeSeriesModel`.
@@ -116,7 +111,8 @@ class WarpfitTemplateLoader:
 
         filepath = os.path.join(
             self.warpcoeffs_dir,
-            f"warpcoeffs_{key}_distinfo.pkl"
+#            f"warpcoeffs_{key}_distinfo.pkl"
+            f"warpcoeffs_v3_{key}.pkl"
         )
 
         self.logger.info(f"Loading warpcoeffs from {filepath}")
@@ -137,7 +133,7 @@ class WarpfitTemplateLoader:
         exclude_input: Optional[list] = None,
         template_selection: Union[int, str] = 1,
         snbasis_selection: Union[int, str] = 1,
-        require_good_templatefit: bool = False,
+        min_fit_quality: None | str = None,
         random_seed: Optional[int] = None,
         color_mode: Optional[str] = None,
     ) -> List[Dict]:
@@ -171,8 +167,11 @@ class WarpfitTemplateLoader:
             - "all" → use all valid SN bases
             - int → randomly sample SN bases with replacement
 
-        require_good_templatefit : bool, optional (default=False)
-            If True, only include SN bases with `good_fit=True`.
+        min_fit_quality : str, optional (default=None)
+            Can require a minimum fit quality for SN bases to be included. Valid values:
+            - "gold" → only include SN bases with good fits and compatible with original template type
+            - "silver" → include SN bases with `good_fit=True` or `good_fit=False` but compatible with original template type
+            - "bronze" → include all SN bases regardless of fit quality
 
         random_seed : int, optional
             Seed for reproducible random sampling.
@@ -219,23 +218,52 @@ class WarpfitTemplateLoader:
         template_collection = self._load_coeffs(fitclass)
 
         # -------------------------
+        # Limit to quality requirement 
+        # -------------------------
+        if min_fit_quality is not None:
+            min_fit_quality = min_fit_quality.lower()
+
+            quality_rank = {
+                "bronze": 0,
+                "silver": 1,
+                "gold": 2,
+            }
+
+            if min_fit_quality not in quality_rank:
+                raise ValueError(
+                    f"Invalid min_fit_quality: {min_fit_quality}. "
+                    "Must be one of: 'gold', 'silver', 'bronze'"
+                )
+
+            threshold = quality_rank[min_fit_quality]
+
+            self.logger.info(
+                f"Filtering SN bases with min_fit_quality={min_fit_quality}"
+            )
+            filtered_collection = {}
+            for sn_name, warpmodels in template_collection['warpcoeff'].items():
+                cutmodels = [
+                    wm
+                    for wm in warpmodels
+                    if quality_rank.get(wm.get("quality"), -1) >= threshold
+                ]
+
+                self.logger.info(
+                    f"SN basis {sn_name}: {len(cutmodels)} templates "
+                    f"after quality filtering ({len(warpmodels)} original)"
+                )
+                if len(cutmodels) > 0:
+                    filtered_collection[sn_name] = cutmodels
+            template_collection['warpcoeff'] = filtered_collection
+
+
+
+        # -------------------------
         # Filter SN bases
         # -------------------------
-        valid_snbases = []
-        for sndict in template_collection:
-
-            sn_name = sndict.get("ztfid")
-
-            if sn_name in exclude_input:
-                self.logger.debug(f"Excluded SN basis: {sn_name}")
-                continue
-
-            if require_good_templatefit and not sndict.get("good_fit", False):
-                self.logger.debug(f"Rejected (bad fit): {sn_name}")
-                continue
-
-            valid_snbases.append(sndict)
-
+        valid_snbases = [
+            sn_name for sn_name in template_collection['warpcoeff'].keys() if sn_name not in exclude_input
+        ]
         if not valid_snbases:
             self.logger.warning("No valid SN bases after filtering")
             return []
@@ -262,26 +290,32 @@ class WarpfitTemplateLoader:
         # -------------------------
         # Loop SN bases
         # -------------------------
-        for sndict in selected_snbases:
-            sn_name = sndict["ztfid"]
+        for sn_name in selected_snbases:
+            warpmodels = template_collection['warpcoeff'][sn_name]
 
             # Potentially load generator for color values
+            # Not sure where we will put this now - in the sndict, or separately? Lets check ... 
             if color_mode == "draw":
                 if 'model_colors' not in sndict:
                     self.logger.warning(
                         f"Cannot draw model peak color for {sn_name} - missing 'model_colors'"
                     )
                     continue
-                K, loc, scale = sndict['model_colors']['K'], sndict['model_colors']['loc'], sndict['model_colors']['scale']
                 # Create an instance of the EMG distribution with the given parameters
-                col_generator = exponnorm(K, loc, scale)
+                col_generator = exponnorm(
+                    template_collection['model_colors']['K'], 
+                    template_collection['model_colors']['model_colors']['loc'], 
+                    template_collection['model_colors']['model_colors']['scale'],
+                    )
                 # Polynomial coefficients to map from the color drawn from sample distribution to the E(B-V) to apply
-                col_poly = np.poly1d(sndict['model_colors']['ebv_corr_func'])
+                col_poly = np.poly1d(
+                    template_collection['model_colors']['model_colors']['ebv_corr_func']
+                    )
 
 
             possible_templates = []
 
-            for warpfit in sndict["warpmodels"]:
+            for warpfit in warpmodels:
 
                 template_sn = warpfit.get("model")
 
@@ -300,13 +334,13 @@ class WarpfitTemplateLoader:
                         )
                         continue
                     # This is the MW-like color such that if applied to this template, the color at peak would match the sample mean
-                    samplecorr_ebv = sndict['model_colors']['loc']
+                    samplecorr_ebv = col_poly( template_collection['model_colors']['loc'] )-warpfit['peakcol']
                 elif color_mode == "draw":
 
                     # Draw a random color corresponding to the original sample
                     drawn_color = col_generator.rvs(random_state=rng.randint(0,1000))
                     # Convert the drawn color to an E(B-V) warping correction using the provided polynomial
-                    samplecorr_ebv = col_poly(drawn_color)
+                    samplecorr_ebv = col_poly(drawn_color) - warpfit['peakcol']
                 else:
                     samplecorr_ebv = None
 
