@@ -9,6 +9,23 @@
 - **Data Handling**: The package works directly with SN data tables (e.g., from ZTF, DES, or other surveys).
 - **Reproducible Results**: Optional reproducibility with random seed for template selection.
 
+## Repository Layout
+
+The repository separates two working layers:
+
+- `notebooks/template_creation/`: historical notebooks and helper files for creating, validating, and colour-calibrating warp coefficient libraries.
+- `notebooks/template_usage/`: current notebooks for loading existing coefficients, visualising templates, and creating light-curve tables.
+
+The importable package code remains at the top level of `warpTemplate/`:
+
+- `loaders.py`: load and sample stored coefficient files.
+- `models.py`: wrap warped sources as `sncosmo.Model` objects.
+- `sources.py`: implement the warped time-series source.
+- `lightcurves.py`: convenience helpers for checking and plotting generated light curves.
+- `corrections.py`: construction-side correction algorithm used by the historical template-building workflow.
+
+For practical use, start with `notebooks/template_usage/create_usable_template_lightcurves.ipynb`.
+
 ## Installation
 
 ### From PyPI (if released)
@@ -124,4 +141,3 @@ MIT License. See `LICENSE` for more details.
 ## Acknowledgments
 
 This package leverages the [sncosmo](https://sncosmo.readthedocs.io/) library for SN model fitting and flux computation.
-
