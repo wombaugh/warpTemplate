@@ -52,6 +52,7 @@ def plot_lightcurve_table(tab, title: Optional[str] = None, ax=None):
         ax.plot(tab["time"][cut], tab["flux"][cut], label=band)
 
     ax.axhline(0, color="0.8", lw=1)
+    ax.set_ylim(0, None)
     ax.set_xlabel("MJD / observer-frame time")
     ax.set_ylabel("Flux")
     if title:
