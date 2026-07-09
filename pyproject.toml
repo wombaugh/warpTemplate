@@ -26,8 +26,13 @@ dependencies = [
     "scipy>=1.9",
     "astropy>=5.1",
     "sncosmo>=2.0",
-    "matplotlib>=3.7"
+    "extinction>=0.4",
+    "matplotlib>=3.7",
+    "pandas>=1.5"
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
+[tool.setuptools]
+packages = ["warpTemplate"]
+
+[tool.setuptools.package-dir]
+warpTemplate = "."

@@ -4,10 +4,18 @@ import pickle
 import logging
 import re
 import random
-from typing import Optional, Union, List, Dict
+from typing import Any, Optional, Union, List, Dict, Mapping
 import numpy as np
 from scipy.stats import exponnorm
 from .models import get_warpedTimeSeriesModel
+
+
+_QUALITY_RANK = {
+    "bronze": 0,
+    "silver": 1,
+    "gold": 2,
+}
+
 
 class WarpfitTemplateLoader:
     """
@@ -82,7 +90,7 @@ class WarpfitTemplateLoader:
     # -------------------------
     # Internal: load with cache
     # -------------------------
-    def _load_coeffs(self, fitclass: str) -> list:
+    def _load_coeffs(self, fitclass: str) -> Mapping[str, Any]:
         """
         Load warp coefficient data for a given fit class, with caching.
 
@@ -95,7 +103,7 @@ class WarpfitTemplateLoader:
 
         Returns
         -------
-        list
+        dict
             Parsed contents of the pickle file.
 
         Raises
@@ -127,6 +135,60 @@ class WarpfitTemplateLoader:
         self._cache[key] = data
         return data
 
+    @staticmethod
+    def _normalize_color_mode(color_mode: Optional[str]) -> Optional[str]:
+        if color_mode is None:
+            return None
+
+        mode = color_mode.lower()
+        if mode == "none":
+            return None
+
+        allowed = {"harmonize", "draw", "target"}
+        if mode not in allowed:
+            raise ValueError(
+                f"Invalid color_mode: {color_mode}. "
+                "Must be one of None, 'none', 'harmonize', 'draw', 'target'."
+            )
+        return mode
+
+    @staticmethod
+    def _validate_model_colors(model_colors: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
+        if model_colors is None:
+            raise ValueError(
+                "color_mode requires 'model_colors' in the warp coefficient file"
+            )
+
+        required = ("K", "loc", "scale", "color1", "color2", "ebv_corr_func")
+        missing = [key for key in required if key not in model_colors]
+        if missing:
+            raise ValueError(
+                "Incomplete model_colors metadata. "
+                f"Missing keys: {', '.join(missing)}"
+            )
+        return model_colors
+
+    @staticmethod
+    def _color_correction_ebv(
+        *,
+        warpfit: Mapping[str, Any],
+        target_peak_color: float,
+        color_poly: np.poly1d,
+    ) -> float:
+        if "peakcol" not in warpfit:
+            raise ValueError(
+                "Cannot apply color correction because the warpfit entry "
+                "does not contain 'peakcol'"
+            )
+
+        color_delta = float(target_peak_color) - float(warpfit["peakcol"])
+        return float(color_poly(color_delta))
+
+    def get_model_colors(self, fitclass: str) -> Optional[Dict[str, Any]]:
+        """Return class-level peak-color distribution metadata, if present."""
+        model_colors = self._load_coeffs(fitclass).get("model_colors")
+        return dict(model_colors) if model_colors is not None else None
+
     def get_templates(
         self,
         fitclass: str,
@@ -136,6 +198,7 @@ class WarpfitTemplateLoader:
         min_fit_quality: None | str = None,
         random_seed: Optional[int] = None,
         color_mode: Optional[str] = None,
+        target_peak_color: Optional[float] = None,
     ) -> List[Dict]:
         """
         Load, filter, and sample warped templates as `sncosmo.Model` objects.
@@ -176,9 +239,13 @@ class WarpfitTemplateLoader:
         random_seed : int, optional
             Seed for reproducible random sampling.
 
-        color_mode: str, optional (default="none")
+        color_mode: str, optional (default=None)
             If "harmonize", apply a color warping to ensure the color at peak matches the ZTF sample mean.
             If "draw", draw a peak color from the distribution of observed colors in the ZTF sample and apply as a warping correction.
+            If "target", apply a color warping toward `target_peak_color`.
+
+        target_peak_color : float, optional
+            Peak color to use when `color_mode="target"`.
 
         Returns
         -------
@@ -188,8 +255,13 @@ class WarpfitTemplateLoader:
             {
                 "basis_sn": str,              # SN basis name
                 "model": sncosmo.Model,      # constructed warped model
-                "template_prob": float       # original sampling weight
-                "model_colors": dict             # Fit parameters of the original template fit (e.g. for color harmonization)
+                "template_prob": float,      # original sampling weight
+                "template_sn": str,          # base sncosmo template name
+                "quality": str,              # fit quality label
+                "peakcol": float,            # stored native peak color
+                "target_peak_color": float,  # target color used for correction, if any
+                "samplecorr_ebv": float,     # E(B-V)-like warp correction, if any
+                "model_colors": dict,        # class color distribution metadata
             }
 
         Notes
@@ -206,16 +278,35 @@ class WarpfitTemplateLoader:
         """
 
         exclude_input = exclude_input or []
+        color_mode = self._normalize_color_mode(color_mode)
+
+        if color_mode == "target" and target_peak_color is None:
+            raise ValueError("target_peak_color must be provided when color_mode='target'")
 
         # -------------------------
         # Local RNG (reproducible)
         # -------------------------
         rng = random.Random(random_seed)
+        np_rng = np.random.default_rng(random_seed)
 
         if random_seed is not None:
             self.logger.info(f"Using random seed: {random_seed}")
 
         template_collection = self._load_coeffs(fitclass)
+        warpcoeff = template_collection["warpcoeff"]
+        model_colors = template_collection.get("model_colors")
+
+        if color_mode is not None:
+            model_colors = self._validate_model_colors(model_colors)
+            color_poly = np.poly1d(model_colors["ebv_corr_func"])
+            color_distribution = exponnorm(
+                float(model_colors["K"]),
+                loc=float(model_colors["loc"]),
+                scale=float(model_colors["scale"]),
+            )
+        else:
+            color_poly = None
+            color_distribution = None
 
         # -------------------------
         # Limit to quality requirement 
@@ -223,46 +314,38 @@ class WarpfitTemplateLoader:
         if min_fit_quality is not None:
             min_fit_quality = min_fit_quality.lower()
 
-            quality_rank = {
-                "bronze": 0,
-                "silver": 1,
-                "gold": 2,
-            }
-
-            if min_fit_quality not in quality_rank:
+            if min_fit_quality not in _QUALITY_RANK:
                 raise ValueError(
                     f"Invalid min_fit_quality: {min_fit_quality}. "
                     "Must be one of: 'gold', 'silver', 'bronze'"
                 )
 
-            threshold = quality_rank[min_fit_quality]
+            threshold = _QUALITY_RANK[min_fit_quality]
 
             self.logger.info(
                 f"Filtering SN bases with min_fit_quality={min_fit_quality}"
             )
             filtered_collection = {}
-            for sn_name, warpmodels in template_collection['warpcoeff'].items():
+            for sn_name, warpmodels in warpcoeff.items():
                 cutmodels = [
                     wm
                     for wm in warpmodels
-                    if quality_rank.get(wm.get("quality"), -1) >= threshold
+                    if _QUALITY_RANK.get(wm.get("quality"), -1) >= threshold
                 ]
 
-                self.logger.info(
+                self.logger.debug(
                     f"SN basis {sn_name}: {len(cutmodels)} templates "
                     f"after quality filtering ({len(warpmodels)} original)"
                 )
                 if len(cutmodels) > 0:
                     filtered_collection[sn_name] = cutmodels
-            template_collection['warpcoeff'] = filtered_collection
-
-
+            warpcoeff = filtered_collection
 
         # -------------------------
         # Filter SN bases
         # -------------------------
         valid_snbases = [
-            sn_name for sn_name in template_collection['warpcoeff'].keys() if sn_name not in exclude_input
+            sn_name for sn_name in warpcoeff.keys() if sn_name not in exclude_input
         ]
         if not valid_snbases:
             self.logger.warning("No valid SN bases after filtering")
@@ -291,27 +374,7 @@ class WarpfitTemplateLoader:
         # Loop SN bases
         # -------------------------
         for sn_name in selected_snbases:
-            warpmodels = template_collection['warpcoeff'][sn_name]
-
-            # Potentially load generator for color values
-            # Not sure where we will put this now - in the sndict, or separately? Lets check ... 
-            if color_mode == "draw":
-                if 'model_colors' not in sndict:
-                    self.logger.warning(
-                        f"Cannot draw model peak color for {sn_name} - missing 'model_colors'"
-                    )
-                    continue
-                # Create an instance of the EMG distribution with the given parameters
-                col_generator = exponnorm(
-                    template_collection['model_colors']['K'], 
-                    template_collection['model_colors']['model_colors']['loc'], 
-                    template_collection['model_colors']['model_colors']['scale'],
-                    )
-                # Polynomial coefficients to map from the color drawn from sample distribution to the E(B-V) to apply
-                col_poly = np.poly1d(
-                    template_collection['model_colors']['model_colors']['ebv_corr_func']
-                    )
-
+            warpmodels = warpcoeff[sn_name]
 
             possible_templates = []
 
@@ -326,23 +389,23 @@ class WarpfitTemplateLoader:
                     continue
 
                 if color_mode == "harmonize":
-                    # Harmonize colors by applying a warping correction to match the sample mean color at peak
-                    # Check that we have the necessary data to apply color warping
-                    if 'model_colors' not in sndict:
-                        self.logger.warning(
-                            f"Cannot harmonize colors for {template_sn} (basis {sn_name}) - missing model_colors"
-                        )
-                        continue
-                    # This is the MW-like color such that if applied to this template, the color at peak would match the sample mean
-                    samplecorr_ebv = col_poly( template_collection['model_colors']['loc'] )-warpfit['peakcol']
+                    applied_target_peak_color = float(model_colors["loc"])
                 elif color_mode == "draw":
-
-                    # Draw a random color corresponding to the original sample
-                    drawn_color = col_generator.rvs(random_state=rng.randint(0,1000))
-                    # Convert the drawn color to an E(B-V) warping correction using the provided polynomial
-                    samplecorr_ebv = col_poly(drawn_color) - warpfit['peakcol']
+                    applied_target_peak_color = float(
+                        color_distribution.rvs(random_state=np_rng)
+                    )
+                elif color_mode == "target":
+                    applied_target_peak_color = float(target_peak_color)
                 else:
+                    applied_target_peak_color = None
                     samplecorr_ebv = None
+
+                if applied_target_peak_color is not None:
+                    samplecorr_ebv = self._color_correction_ebv(
+                        warpfit=warpfit,
+                        target_peak_color=applied_target_peak_color,
+                        color_poly=color_poly,
+                    )
 
                 try:
                     model = get_warpedTimeSeriesModel(
@@ -353,7 +416,10 @@ class WarpfitTemplateLoader:
                         original_template_version=None,
                         samplecorr_ebv=samplecorr_ebv,
                         samplecorr_rv=3.1,
-                        samplecorr_bands=['ztfg', 'ztfr'],
+                        samplecorr_bands=[
+                            model_colors["color1"],
+                            model_colors["color2"],
+                        ] if model_colors else None,
                     )
                 except Exception as e:
                     self.logger.error(
@@ -363,8 +429,14 @@ class WarpfitTemplateLoader:
 
                 possible_templates.append({
                     "basis_sn": sn_name,
+                    "template_sn": template_sn,
                     "model": model,
                     "template_prob": warpfit["draw_prob"],
+                    "quality": warpfit.get("quality"),
+                    "peakcol": warpfit.get("peakcol"),
+                    "target_peak_color": applied_target_peak_color,
+                    "samplecorr_ebv": samplecorr_ebv,
+                    "model_colors": dict(model_colors) if model_colors else None,
                 })
 
             if not possible_templates:
@@ -382,11 +454,17 @@ class WarpfitTemplateLoader:
                 if template_selection > 0:
                     weights = [tpl["template_prob"] for tpl in possible_templates]
 
-                    selected_templates = rng.choices(
-                        possible_templates,
-                        weights=weights,
-                        k=template_selection
-                    )
+                    if sum(weights) > 0:
+                        selected_templates = rng.choices(
+                            possible_templates,
+                            weights=weights,
+                            k=template_selection
+                        )
+                    else:
+                        selected_templates = rng.choices(
+                            possible_templates,
+                            k=template_selection
+                        )
 
                 else:
                     selected_templates = rng.choices(
@@ -412,4 +490,3 @@ class WarpfitTemplateLoader:
         """
         self.logger.info("Clearing warpcoeff cache")
         self._cache.clear()
-        
