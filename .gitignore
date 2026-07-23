@@ -12,3 +12,7 @@ dist/
 *.out
 *.synctex.gz
 *.toc
+
+# Classifier splits, checkpoints, predictions, metrics, and figures are reproducible.
+classification_splits/
+classifier_runs/

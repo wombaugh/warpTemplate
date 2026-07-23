@@ -34,6 +34,17 @@ dependencies = [
     "h5py>=3.8"
 ]
 
+[project.optional-dependencies]
+classification = [
+    "scikit-learn>=1.1",
+    "lightgbm>=3.3",
+    "lcdata>=1.1",
+    "torch>=2.0",
+    "seaborn>=0.12",
+    "jupyterlab>=4",
+    "supernnova>=3.0"
+]
+
 [tool.setuptools]
 packages = ["warpTemplate", "warpTemplate.config"]
 
