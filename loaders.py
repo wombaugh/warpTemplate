@@ -4,7 +4,9 @@ import pickle
 import logging
 import re
 import random
-from typing import Any, Optional, Union, List, Dict, Mapping
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Iterator, Optional, Union, List, Dict, Mapping
 import numpy as np
 from scipy.stats import exponnorm
 from .models import get_warpedTimeSeriesModel
@@ -15,6 +17,33 @@ _QUALITY_RANK = {
     "silver": 1,
     "gold": 2,
 }
+
+
+@dataclass(frozen=True)
+class WarpTemplateDescriptor:
+    """Serializable reference to one selected Warp template realization."""
+
+    fitclass: str
+    basis_sn: str
+    template_index: int
+    template_sn: str
+    template_prob: float
+    quality: Optional[str]
+    peakcol: Optional[float]
+    target_peak_color: Optional[float]
+    samplecorr_ebv: Optional[float]
+    color_mode: Optional[str]
+
+    @property
+    def template_key(self) -> str:
+        """Return the stable coefficient-library key for this template entry."""
+
+        return f"{self.fitclass}|{self.basis_sn}|{self.template_index}"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON- and DataFrame-friendly descriptor mapping."""
+
+        return {**asdict(self), "template_key": self.template_key}
 
 
 class WarpfitTemplateLoader:
@@ -75,8 +104,10 @@ class WarpfitTemplateLoader:
         warpcoeffs_dir: str,
         logger: Optional[logging.Logger] = None
     ):
+        """Initialize the coefficient directory, logger, and fitclass cache."""
+
         self.warpcoeffs_dir = warpcoeffs_dir
-        self._cache: Dict[str, list] = {}
+        self._cache: Dict[str, Mapping[str, Any]] = {}
 
         if logger is None:
             logging.basicConfig(
@@ -135,8 +166,127 @@ class WarpfitTemplateLoader:
         self._cache[key] = data
         return data
 
+    def coefficient_path(self, fitclass: str) -> Path:
+        """Return the coefficient-file path associated with one fitclass."""
+
+        key = re.sub(r"/", "", fitclass)
+        return Path(self.warpcoeffs_dir) / f"warpcoeffs_v3_{key}.pkl"
+
+    def available_fitclasses(self) -> List[str]:
+        """Discover fitclasses represented by coefficient files on disk."""
+
+        prefix = "warpcoeffs_v3_"
+        return sorted(
+            path.stem[len(prefix) :]
+            for path in Path(self.warpcoeffs_dir).glob(f"{prefix}*.pkl")
+        )
+
+    def get_coefficient_entry(
+        self, fitclass: str, basis_sn: str, template_index: int
+    ) -> Mapping[str, Any]:
+        """Resolve one stable basis/index reference in the coefficient library."""
+
+        collection = self._load_coeffs(fitclass)
+        try:
+            return collection["warpcoeff"][basis_sn][int(template_index)]
+        except (KeyError, IndexError) as error:
+            raise KeyError(
+                f"unknown Warp entry {fitclass}|{basis_sn}|{template_index}"
+            ) from error
+
+    def get_entry_probabilities(
+        self,
+        fitclass: str,
+        *,
+        min_fit_quality: Optional[str] = None,
+    ) -> List[tuple[WarpTemplateDescriptor, float]]:
+        """Return eligible entries and their hierarchical draw probabilities."""
+
+        if min_fit_quality is not None:
+            quality = min_fit_quality.lower()
+            if quality not in _QUALITY_RANK:
+                raise ValueError(
+                    "min_fit_quality must be one of: 'gold', 'silver', 'bronze'"
+                )
+            threshold = _QUALITY_RANK[quality]
+        else:
+            threshold = -1
+
+        collection = self._load_coeffs(fitclass)
+        valid: List[tuple[str, List[tuple[int, Mapping[str, Any]]]]] = []
+        for basis_sn, entries in collection["warpcoeff"].items():
+            selected = [
+                (index, entry)
+                for index, entry in enumerate(entries)
+                if _QUALITY_RANK.get(entry.get("quality"), -1) >= threshold
+            ]
+            if selected:
+                valid.append((str(basis_sn), selected))
+        if not valid:
+            return []
+
+        result: List[tuple[WarpTemplateDescriptor, float]] = []
+        basis_probability = 1.0 / len(valid)
+        for basis_sn, entries in valid:
+            weights = np.asarray(
+                [float(entry.get("draw_prob", 0.0)) for _, entry in entries],
+                dtype=float,
+            )
+            if np.any(weights < 0):
+                raise ValueError(
+                    f"negative template draw probability in {fitclass}|{basis_sn}"
+                )
+            conditional = (
+                weights / weights.sum()
+                if weights.sum() > 0
+                else np.full(len(entries), 1.0 / len(entries))
+            )
+            for (template_index, entry), probability in zip(entries, conditional):
+                descriptor = WarpTemplateDescriptor(
+                    fitclass=str(fitclass),
+                    basis_sn=basis_sn,
+                    template_index=int(template_index),
+                    template_sn=str(entry.get("model")),
+                    template_prob=float(entry.get("draw_prob", 0.0)),
+                    quality=entry.get("quality"),
+                    peakcol=entry.get("peakcol"),
+                    target_peak_color=None,
+                    samplecorr_ebv=None,
+                    color_mode=None,
+                )
+                result.append((descriptor, basis_probability * float(probability)))
+        return result
+
+    def build_uncolored_source(
+        self, descriptor: WarpTemplateDescriptor | Mapping[str, Any]
+    ) -> Any:
+        """Build the reusable colour-neutral source referenced by a descriptor."""
+
+        if not isinstance(descriptor, WarpTemplateDescriptor):
+            fields = WarpTemplateDescriptor.__dataclass_fields__
+            descriptor = WarpTemplateDescriptor(
+                **{key: descriptor[key] for key in fields}
+            )
+        entry = self.get_coefficient_entry(
+            descriptor.fitclass,
+            descriptor.basis_sn,
+            descriptor.template_index,
+        )
+        corr = entry["mdict"]["corrmodel"]
+        from .sources import DynamicColorWarpSource
+
+        return DynamicColorWarpSource.from_warp_grid(
+            corr["phase"],
+            corr["wave"],
+            corr["flux"],
+            descriptor.template_sn,
+            name=f"{descriptor.basis_sn}_{descriptor.template_sn}",
+        )
+
     @staticmethod
     def _normalize_color_mode(color_mode: Optional[str]) -> Optional[str]:
+        """Normalize supported colour-mode spellings and reject unknown modes."""
+
         if color_mode is None:
             return None
 
@@ -154,6 +304,8 @@ class WarpfitTemplateLoader:
 
     @staticmethod
     def _validate_model_colors(model_colors: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
+        """Return complete class-colour metadata or raise a clear error."""
+
         if model_colors is None:
             raise ValueError(
                 "color_mode requires 'model_colors' in the warp coefficient file"
@@ -175,6 +327,8 @@ class WarpfitTemplateLoader:
         target_peak_color: float,
         color_poly: np.poly1d,
     ) -> float:
+        """Map a requested peak-colour change to the internal correction."""
+
         if "peakcol" not in warpfit:
             raise ValueError(
                 "Cannot apply color correction because the warpfit entry "
@@ -308,6 +462,15 @@ class WarpfitTemplateLoader:
             color_poly = None
             color_distribution = None
 
+        def iter_drawn_colors() -> Iterator[float]:
+            """Yield SciPy colour draws from fixed blocks to reduce call overhead."""
+
+            while True:
+                values = color_distribution.rvs(size=4096, random_state=np_rng)
+                yield from np.asarray(values, dtype=float)
+
+        drawn_colors = iter_drawn_colors() if color_mode == "draw" else None
+
         # -------------------------
         # Limit to quality requirement 
         # -------------------------
@@ -391,9 +554,7 @@ class WarpfitTemplateLoader:
                 if color_mode == "harmonize":
                     applied_target_peak_color = float(model_colors["loc"])
                 elif color_mode == "draw":
-                    applied_target_peak_color = float(
-                        color_distribution.rvs(random_state=np_rng)
-                    )
+                    applied_target_peak_color = float(next(drawn_colors))
                 elif color_mode == "target":
                     applied_target_peak_color = float(target_peak_color)
                 else:
@@ -480,6 +641,217 @@ class WarpfitTemplateLoader:
         self.logger.info(f"Returning {len(results)} templates")
 
         return results
+
+    def get_template_descriptors(
+        self,
+        fitclass: str,
+        exclude_input: Optional[list] = None,
+        template_selection: Union[int, str] = 1,
+        snbasis_selection: Union[int, str] = 1,
+        min_fit_quality: None | str = None,
+        random_seed: Optional[int] = None,
+        color_mode: Optional[str] = None,
+        target_peak_color: Optional[float] = None,
+    ) -> List[WarpTemplateDescriptor]:
+        """Return selected template references without constructing models."""
+
+        return list(
+            self.iter_template_descriptors(
+                fitclass,
+                exclude_input=exclude_input,
+                template_selection=template_selection,
+                snbasis_selection=snbasis_selection,
+                min_fit_quality=min_fit_quality,
+                random_seed=random_seed,
+                color_mode=color_mode,
+                target_peak_color=target_peak_color,
+            )
+        )
+
+    def iter_template_descriptors(
+        self,
+        fitclass: str,
+        exclude_input: Optional[list] = None,
+        template_selection: Union[int, str] = 1,
+        snbasis_selection: Union[int, str] = 1,
+        min_fit_quality: None | str = None,
+        random_seed: Optional[int] = None,
+        color_mode: Optional[str] = None,
+        target_peak_color: Optional[float] = None,
+    ) -> Iterator[WarpTemplateDescriptor]:
+        """Yield template references without retaining the complete draw in RAM."""
+
+        exclude_input = exclude_input or []
+        color_mode = self._normalize_color_mode(color_mode)
+        if color_mode == "target" and target_peak_color is None:
+            raise ValueError("target_peak_color must be provided when color_mode='target'")
+
+        rng = random.Random(random_seed)
+        np_rng = np.random.default_rng(random_seed)
+        collection = self._load_coeffs(fitclass)
+        warpcoeff = collection["warpcoeff"]
+        model_colors = collection.get("model_colors")
+        if color_mode is not None:
+            model_colors = self._validate_model_colors(model_colors)
+            color_poly = np.poly1d(model_colors["ebv_corr_func"])
+            color_distribution = exponnorm(
+                float(model_colors["K"]),
+                loc=float(model_colors["loc"]),
+                scale=float(model_colors["scale"]),
+            )
+        else:
+            color_poly = None
+            color_distribution = None
+
+        def iter_drawn_colors() -> Iterator[float]:
+            """Yield SciPy colour draws from fixed blocks to reduce call overhead."""
+
+            while True:
+                values = color_distribution.rvs(size=4096, random_state=np_rng)
+                yield from np.asarray(values, dtype=float)
+
+        drawn_colors = iter_drawn_colors() if color_mode == "draw" else None
+
+        if min_fit_quality is not None:
+            min_fit_quality = min_fit_quality.lower()
+            if min_fit_quality not in _QUALITY_RANK:
+                raise ValueError(
+                    "min_fit_quality must be one of: 'gold', 'silver', 'bronze'"
+                )
+            threshold = _QUALITY_RANK[min_fit_quality]
+        else:
+            threshold = -1
+
+        # Retain original list indices so descriptors remain stable after filtering.
+        valid = {
+            basis: [
+                (index, entry)
+                for index, entry in enumerate(entries)
+                if _QUALITY_RANK.get(entry.get("quality"), -1) >= threshold
+                and entry.get("model") not in exclude_input
+            ]
+            for basis, entries in warpcoeff.items()
+            if basis not in exclude_input
+        }
+        valid = {basis: entries for basis, entries in valid.items() if entries}
+        if not valid:
+            return []
+
+        bases = list(valid)
+        if snbasis_selection == "all":
+            selected_bases = bases
+        elif isinstance(snbasis_selection, int) and snbasis_selection >= 0:
+            # Draw one basis at a time so million-object samples do not first
+            # allocate a second, equally long Python list of basis strings.
+            selected_bases = (
+                rng.choices(bases, k=1)[0] for _ in range(snbasis_selection)
+            )
+        else:
+            raise ValueError("snbasis_selection must be a non-negative int or 'all'")
+
+        for basis in selected_bases:
+            candidates = valid[basis]
+            if template_selection == "all":
+                selected = candidates
+            elif isinstance(template_selection, int):
+                count = abs(template_selection)
+                weights = (
+                    [float(entry.get("draw_prob", 0.0)) for _, entry in candidates]
+                    if template_selection > 0
+                    else None
+                )
+                selected = rng.choices(
+                    candidates,
+                    weights=weights if weights and sum(weights) > 0 else None,
+                    k=count,
+                )
+            else:
+                raise ValueError("template_selection must be int or 'all'")
+
+            for entry_index, entry in selected:
+                if color_mode == "harmonize":
+                    drawn_color = float(model_colors["loc"])
+                elif color_mode == "draw":
+                    drawn_color = float(next(drawn_colors))
+                elif color_mode == "target":
+                    drawn_color = float(target_peak_color)
+                else:
+                    drawn_color = None
+                correction = (
+                    self._color_correction_ebv(
+                        warpfit=entry,
+                        target_peak_color=drawn_color,
+                        color_poly=color_poly,
+                    )
+                    if drawn_color is not None
+                    else None
+                )
+                yield WarpTemplateDescriptor(
+                    fitclass=str(fitclass),
+                    basis_sn=str(basis),
+                    template_index=int(entry_index),
+                    template_sn=str(entry.get("model")),
+                    template_prob=float(entry.get("draw_prob", 0.0)),
+                    quality=entry.get("quality"),
+                    peakcol=entry.get("peakcol"),
+                    target_peak_color=drawn_color,
+                    samplecorr_ebv=correction,
+                    color_mode=color_mode,
+                )
+
+    def materialize_descriptor(
+        self,
+        descriptor: WarpTemplateDescriptor | Mapping[str, Any],
+        *,
+        source: Any = None,
+    ) -> Dict[str, Any]:
+        """Construct an event model, optionally sharing a prepared source."""
+
+        if not isinstance(descriptor, WarpTemplateDescriptor):
+            fields = WarpTemplateDescriptor.__dataclass_fields__
+            descriptor = WarpTemplateDescriptor(
+                **{key: descriptor[key] for key in fields}
+            )
+        collection = self._load_coeffs(descriptor.fitclass)
+        entry = collection["warpcoeff"][descriptor.basis_sn][descriptor.template_index]
+        model_colors = collection.get("model_colors")
+        if source is None:
+            model = get_warpedTimeSeriesModel(
+                name=f"{descriptor.basis_sn}_{descriptor.template_sn}",
+                original_template_name=descriptor.template_sn,
+                warpdata=entry["mdict"],
+                z=float(entry["z"]),
+                original_template_version=None,
+                samplecorr_ebv=descriptor.samplecorr_ebv,
+                samplecorr_rv=3.1,
+                samplecorr_bands=[model_colors["color1"], model_colors["color2"]]
+                if model_colors
+                else None,
+            )
+        else:
+            from .models import get_model_from_warped_source
+
+            model = get_model_from_warped_source(
+                source,
+                z=float(entry["z"]),
+                samplecorr_ebv=descriptor.samplecorr_ebv,
+            )
+        return {
+            "basis_sn": descriptor.basis_sn,
+            "template_sn": descriptor.template_sn,
+            "model": model,
+            "template_prob": descriptor.template_prob,
+            "quality": descriptor.quality,
+            "peakcol": descriptor.peakcol,
+            "target_peak_color": descriptor.target_peak_color,
+            "samplecorr_ebv": descriptor.samplecorr_ebv,
+            "model_colors": dict(model_colors) if model_colors else None,
+        }
+
+    def clear_fitclass_cache(self, fitclass: str) -> None:
+        """Remove one coefficient file from the in-memory cache."""
+
+        self._cache.pop(re.sub(r"/", "", fitclass), None)
 
     # -------------------------
     # Optional: cache control

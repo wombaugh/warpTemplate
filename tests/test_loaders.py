@@ -7,7 +7,17 @@ import unittest
 from pathlib import Path
 
 
+_MISSING_MODULE = object()
+_ISOLATED_MODULES = (
+    "warpTemplate",
+    "warpTemplate.models",
+    "warpTemplate.loaders",
+)
+
+
 def load_loader_module():
+    """Load the coefficient loader with a lightweight fake model module."""
+
     package = types.ModuleType("warpTemplate")
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
 
@@ -32,13 +42,26 @@ def load_loader_module():
 
 class WarpfitTemplateLoaderTest(unittest.TestCase):
     def setUp(self):
+        """Preserve real package modules before installing isolated test doubles."""
+
+        self.saved_modules = {
+            name: sys.modules.get(name, _MISSING_MODULE)
+            for name in _ISOLATED_MODULES
+        }
         self.tmpdir = tempfile.TemporaryDirectory()
         self.coeff_dir = Path(self.tmpdir.name)
         self.module = load_loader_module()
         self.write_coeffs()
 
     def tearDown(self):
+        """Remove fixtures and restore package modules for later test files."""
+
         self.tmpdir.cleanup()
+        for name, module in self.saved_modules.items():
+            if module is _MISSING_MODULE:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
     def write_coeffs(self):
         data = {
@@ -135,6 +158,66 @@ class WarpfitTemplateLoaderTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             loader.get_templates("SN Test", color_mode="target")
+
+    def test_descriptor_draw_does_not_materialize_models(self):
+        """Descriptor selection must retain references without calling the model builder."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        descriptors = loader.get_template_descriptors(
+            "SN Test",
+            snbasis_selection=20,
+            template_selection=1,
+            min_fit_quality="gold",
+            random_seed=4,
+            color_mode="target",
+            target_peak_color=0.9,
+        )
+
+        self.assertEqual(len(descriptors), 20)
+        self.assertTrue(all("mdict" not in item.to_dict() for item in descriptors))
+        self.assertTrue(all(not hasattr(item, "model") for item in descriptors))
+        self.assertTrue(all(item.template_key.startswith("SN Test|") for item in descriptors))
+
+    def test_descriptor_can_be_materialized_later(self):
+        """Stable descriptor indices must recover the selected coefficient entry."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        descriptor = loader.get_template_descriptors(
+            "SN Test",
+            snbasis_selection=1,
+            template_selection=1,
+            min_fit_quality="gold",
+            random_seed=8,
+        )[0]
+        record = loader.materialize_descriptor(descriptor)
+
+        self.assertEqual(record["basis_sn"], descriptor.basis_sn)
+        self.assertEqual(record["template_sn"], descriptor.template_sn)
+        self.assertEqual(record["model"]["original_template_name"], descriptor.template_sn)
+
+    def test_clear_fitclass_cache_is_selective(self):
+        """Batch cleanup must remove only the completed fitclass coefficient file."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        loader.get_model_colors("SN Test")
+        self.assertIn("SN Test", loader._cache)
+        loader.clear_fitclass_cache("SN Test")
+        self.assertNotIn("SN Test", loader._cache)
+
+    def test_joint_entry_probabilities_preserve_hierarchical_sampling(self):
+        """Bases remain uniform while weights act only inside each basis."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        entries = loader.get_entry_probabilities(
+            "SN Test", min_fit_quality="bronze"
+        )
+        probabilities = {
+            descriptor.template_key: probability
+            for descriptor, probability in entries
+        }
+        self.assertAlmostEqual(probabilities["SN Test|basis_a|0"], 1.0 / 6.0)
+        self.assertAlmostEqual(probabilities["SN Test|basis_a|1"], 1.0 / 3.0)
+        self.assertAlmostEqual(probabilities["SN Test|basis_b|0"], 1.0 / 2.0)
 
 
 if __name__ == "__main__":

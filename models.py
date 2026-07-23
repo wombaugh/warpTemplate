@@ -1,14 +1,12 @@
-#from __future__ import annotations
+"""Model constructors for warped spectral time-series sources."""
 
-# warp_templates/models.py
-import sncosmo
-from .sources import WarpedTimeSeriesSource
+from typing import Any, Mapping, Optional
+import warnings
 
-
-from typing import Optional, Mapping, Any
 import numpy as np
 import sncosmo
-import warnings
+
+from .sources import DynamicColorWarpSource, WarpedTimeSeriesSource
 
 
 def get_warpedTimeSeriesModel(
@@ -70,7 +68,7 @@ def get_warpedTimeSeriesModel(
     samplecorr_rv : float, optional (default=3.1)
         R_V value to use for the distance correction if `distcorr_ebv` is
     samplecorr_bands : list of str, optional
-        List of band names to use for calculating the color correction
+        Retained for API compatibility; dynamic CCM89 colour needs no bands.
 
     Returns
     -------
@@ -103,25 +101,6 @@ def get_warpedTimeSeriesModel(
             f"Inconsistent warp data shapes: "
             f"flux.shape={flux.shape}, expected ({phase.size}, {wave.size})"
         )
-
-    # Determine mean color warping to add if requested
-    #if samplecorr_ebv is not None:
-    #    # We neeed to color of the base template to calculate the necessary correction
-    #    # Should have been calculated during the warp coefficient fitting and stored in the warpdata, but we can also calculate it here if needed
-    #    # ---- Create warped source ----
-    #    testsource = WarpedTimeSeriesSource(
-    #        phase=phase,
-    #        wave=wave,
-    #        flux=flux,
-    #        original_template_name=original_template_name,
-    #        original_template_version=original_template_version,
-    #        time_spline_degree=3,
-    #    )
-    #    samplecorr_offset = testsource.bandmag(samplecorr_bands[0], "ab", 0) - testsource.bandmag(samplecorr_bands[1], "ab", 0)
-    #    correction_ebv=samplecorr_ebv-samplecorr_offset
-    #else:
-    #    correction_ebv = None
-
 
     # ---- Create warped source ----
     warped_source = WarpedTimeSeriesSource(
@@ -159,15 +138,6 @@ def get_warpedTimeSeriesModel(
         effect_names.append("mw")
         effect_frames.append("obs")
 
-    # Apply mean color warping if requested
-    #if samplecorr_ebv is not None:
-    #    ccm_colcorr = sncosmo.CCM89Dust()
-    #    effects.append(ccm_colcorr)
-    #    effect_names.append("samplecorr")
-    #    effect_frames.append("rest")
-    #    # Calculate peak color for normalization
-    #    samplecorr_offset = warped_source.bandmag(samplecorr_bands[0], "ab", 0) - warped_source.bandmag(samplecorr_bands[1], "ab", 0)
-
     # ---- Build model ----
     if effects:
         model = sncosmo.Model(
@@ -192,8 +162,57 @@ def get_warpedTimeSeriesModel(
         model.set(mwebv=mwebv)
         model.set(mwr_v=mwr_v)
 
-    #if samplecorr_ebv is not None:
-    #    model.set(samplecorrebv=samplecorr_ebv-samplecorr_offset)
-    #    model.set(samplecorrr_v=samplecorr_rv)
-
     return model
+
+
+def get_model_from_warped_source(
+    source: DynamicColorWarpSource,
+    *,
+    z: Optional[float] = None,
+    samplecorr_ebv: Optional[float] = None,
+    hostr_v: Optional[float] = 3.1,
+    mwebv: Optional[float] = None,
+    mwr_v: float = 3.1,
+    use_host_dust: bool = True,
+    use_mw_dust: bool = False,
+) -> sncosmo.Model:
+    """Create an event-local model that shares a prepared Warp source spline."""
+
+    effects = []
+    effect_names = []
+    effect_frames = []
+    if use_host_dust:
+        effects.append(sncosmo.CCM89Dust())
+        effect_names.append("host")
+        effect_frames.append("rest")
+    if use_mw_dust:
+        if mwebv is None:
+            raise ValueError("mwebv must be provided if use_mw_dust=True")
+        effects.append(sncosmo.CCM89Dust())
+        effect_names.append("mw")
+        effect_frames.append("obs")
+
+    if effects:
+        model = sncosmo.Model(
+            source=source,
+            effects=effects,
+            effect_names=effect_names,
+            effect_frames=effect_frames,
+        )
+    else:
+        model = sncosmo.Model(source=source)
+    parameters: dict[str, float] = {
+        "samplecorr_ebv": 0.0 if samplecorr_ebv is None else float(samplecorr_ebv)
+    }
+    if z is not None:
+        parameters["z"] = float(z)
+    if use_host_dust and hostr_v is not None:
+        parameters["hostr_v"] = float(hostr_v)
+    if use_mw_dust:
+        parameters["mwebv"] = float(mwebv)
+        parameters["mwr_v"] = float(mwr_v)
+    model.set(**parameters)
+    return model
+
+
+__all__ = ["get_model_from_warped_source", "get_warpedTimeSeriesModel"]

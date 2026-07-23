@@ -28,11 +28,17 @@ dependencies = [
     "sncosmo>=2.0",
     "extinction>=0.4",
     "matplotlib>=3.7",
-    "pandas>=1.5"
+    "pandas>=1.5",
+    "skysurvey>=0.31,<0.32",
+    "pyarrow>=10",
+    "h5py>=3.8"
 ]
 
 [tool.setuptools]
-packages = ["warpTemplate"]
+packages = ["warpTemplate", "warpTemplate.config"]
 
 [tool.setuptools.package-dir]
 warpTemplate = "."
+
+[tool.setuptools.package-data]
+warpTemplate = ["config/*.json"]

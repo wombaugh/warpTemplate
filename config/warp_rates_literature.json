@@ -1,0 +1,1103 @@
+{
+  "schema_version": 1,
+  "units": "Gpc^-3 yr^-1 h70^3",
+  "notes": "Literature rate configuration for warpcoeff_v3 fitclasses. Rates are local volumetric rates unless rate_kind indicates a parent fraction. Derived rates are resolved by the adapter from parent rates and fractions. Entries marked missing_direct_rate are intentionally not silently estimated. Absolute-magnitude priors are stored separately under magabs_priors. Their source_band records the literature band; sncosmo_band records the band used by set_source_peakabsmag. No color or band conversion is silently applied.",
+  "magabs_priors": {
+    "SLSN (e)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SLSN-I", "SLSN-II"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Chen2022ZTFSLSNI",
+          "url": "https://arxiv.org/abs/2202.02059",
+          "note": "Used for the SLSN-I child prior."
+        },
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Used for the SLSN-II child prior."
+        }
+      ],
+      "notes": "Aggregate prior; draw from SLSN-I/SLSN-II children. The literature bands of the children are recorded on the drawn target row."
+    },
+    "SLSN (w)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SLSN-I", "SLSN-II"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Chen2022ZTFSLSNI",
+          "url": "https://arxiv.org/abs/2202.02059",
+          "note": "Used for the SLSN-I child prior."
+        },
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Used for the SLSN-II child prior."
+        }
+      ],
+      "notes": "Wide SLSN aggregate prior; intentionally does not include SN IIn even though the taxonomy overlap is noted in the rate entry."
+    },
+    "SLSN-I": {
+      "status": "adopted",
+      "distribution": "split_normal",
+      "loc": -21.48,
+      "scale_bright": 0.61,
+      "scale_faint": 1.13,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "rest-frame g",
+      "sources": [
+        {
+          "bibkey": "Chen2022ZTFSLSNI",
+          "url": "https://arxiv.org/abs/2202.02059",
+          "note": "ZTF Phase-I SLSN-I sample; M_g,peak median -21.48 with 16/84-percentile offsets."
+        },
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Alternative SLSN-I pseudo-absolute magnitude M=-21.7+/-0.4 in an unfiltered ROTSE-like band."
+        }
+      ],
+      "notes": "Uses the ZTF SLSN-I rest-frame g-band distribution as the primary prior. No g-to-B conversion is applied; source_band records the literature band."
+    },
+    "SLSN-II": {
+      "status": "proxy",
+      "distribution": "normal",
+      "loc": -21.7,
+      "scale": 0.8,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "ROTSE-IIIb unfiltered",
+      "sources": [
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Constrains SLSN pseudo-absolute magnitude distributions and quotes SLSN-I M=-21.7+/-0.4; SLSN-II prior remains a broad proxy from the same SLSN rate/light-curve analysis."
+        }
+      ],
+      "notes": "Broad proxy for hydrogen-rich SLSNe. Quimby et al. provide the relevant SLSN-II rate and pAMD framework, but the compact abstracted value here is less secure than SLSN-I."
+    },
+    "SN CC (a)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN IIP", "SN IIb", "SN IIn", "SN Ib", "SN Ic", "SN Ic-BL", "SLSN-I", "SLSN-II"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Main source for common core-collapse subtype MB distributions."
+        }
+      ],
+      "notes": "All-CC aggregate prior; draws from available child priors, rate-weighted where child rates resolve."
+    },
+    "SN II (w)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN IIP", "SN IIb", "SN IIn"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Main source for II-P, IIb and IIn MB distributions."
+        }
+      ],
+      "notes": "Hydrogen-rich wide prior from children. There is no separate warpcoeff_v3 SN IIL file, so IIL is not drawn separately."
+    },
+    "SN II": {
+      "status": "proxy",
+      "distribution": "normal",
+      "loc": -16.75,
+      "scale": 0.98,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Uses the bias-corrected SN IIP MB distribution as a proxy for broad normal SN II."
+        }
+      ],
+      "notes": "Proxy for the broad SN II warp class because the literature value is subtype-specific."
+    },
+    "SN IIP": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -16.75,
+      "scale": 0.98,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Bias-corrected SN IIP distribution: MB=-16.75 with standard deviation 0.98."
+        }
+      ],
+      "notes": "Direct subtype prior from Richardson et al. 2014."
+    },
+    "SN IIb": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -16.99,
+      "scale": 0.92,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Bias-corrected SN IIb distribution: MB=-16.99 with standard deviation 0.92."
+        }
+      ],
+      "notes": "Direct subtype prior from Richardson et al. 2014."
+    },
+    "SN IIn": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -18.53,
+      "scale": 1.36,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Bias-corrected SN IIn distribution: MB=-18.53 with standard deviation 1.36."
+        }
+      ],
+      "notes": "Direct subtype prior from Richardson et al. 2014; broad because interacting events include a luminous tail."
+    },
+    "SN Ia (a)": {
+      "status": "aggregate",
+      "distribution": "normal",
+      "loc": -19.25,
+      "scale": 0.50,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Normal Ia bias-corrected distribution: MB=-19.25 with standard deviation 0.50."
+        }
+      ],
+      "notes": "All-Ia aggregate uses the normal Ia distribution as a practical broad-Ia prior; peculiar Ia subclasses have their own entries."
+    },
+    "SN Ia (w)": {
+      "status": "proxy",
+      "distribution": "normal",
+      "loc": -19.25,
+      "scale": 0.50,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Normal Ia bias-corrected distribution: MB=-19.25 with standard deviation 0.50."
+        }
+      ],
+      "notes": "Wide Ia class uses the normal Ia luminosity distribution as a proxy."
+    },
+    "SN Ia-91T": {
+      "status": "proxy",
+      "distribution": "fixed",
+      "loc": -19.25,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "V",
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN Ia subtype LF peaks around M_V,peak ~ -19.25 for Ia-91T."
+        }
+      ],
+      "notes": "LF-peak proxy; Desai et al. give a subtype LF peak, not a compact Gaussian width."
+    },
+    "SN Ia-91bg": {
+      "status": "proxy",
+      "distribution": "fixed",
+      "loc": -17.75,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "V",
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN Ia subtype LF peaks around M_V,peak ~ -17.75 for Ia-91bg."
+        }
+      ],
+      "notes": "LF-peak proxy; no scatter is invented."
+    },
+    "SN Ia-SC": {
+      "status": "adopted",
+      "distribution": "uniform",
+      "min": -21.0,
+      "max": -19.0,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Ashall2021SC",
+          "url": "https://arxiv.org/abs/2106.12140",
+          "note": "2003fg-like/Super-Chandrasekhar SNe Ia have peak B-band magnitudes between -19 and -21 mag."
+        }
+      ],
+      "notes": "Uniform over the literature range for 2003fg-like/Super-Chandrasekhar SNe Ia."
+    },
+    "SN Ia-pec": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN Ia-SC", "SN Iax"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Ashall2021SC",
+          "url": "https://arxiv.org/abs/2106.12140",
+          "note": "Used for the Super-Chandrasekhar child prior."
+        },
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "Used for the Iax child prior."
+        }
+      ],
+      "notes": "No clean direct broad SN Ia-pec luminosity prior; use children only if this aggregate is explicitly activated."
+    },
+    "SN Ia-pec (w)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN Ia-SC", "SN Iax"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Ashall2021SC",
+          "url": "https://arxiv.org/abs/2106.12140",
+          "note": "Used for the Super-Chandrasekhar child prior."
+        },
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "Used for the Iax child prior."
+        }
+      ],
+      "notes": "No clean direct broad SN Ia-pec(w) luminosity prior; use children only if this aggregate is explicitly activated."
+    },
+    "SN Iax": {
+      "status": "adopted",
+      "distribution": "uniform",
+      "min": -18.9,
+      "max": -14.2,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "V",
+      "sources": [
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "SNe Iax typically span M_V,peak from -14.2 to -18.9 mag."
+        }
+      ],
+      "notes": "Uniform over the observed Iax peak-magnitude range."
+    },
+    "SN Ib": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -17.45,
+      "scale": 1.12,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Bias-corrected SN Ib distribution: MB=-17.45 with standard deviation 1.12."
+        },
+        {
+          "bibkey": "Drout2011Ibc",
+          "url": "https://arxiv.org/abs/1011.4959",
+          "note": "Alternative R-band Ibc study reports M_R=-17.9+/-0.9 for SNe Ib."
+        }
+      ],
+      "notes": "Uses Richardson B-band distribution; Drout R-band value kept as alternative context."
+    },
+    "SN Ibc": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Main source for Ib/Ic child priors."
+        }
+      ],
+      "notes": "Aggregate stripped-envelope prior; draws from children."
+    },
+    "SN Ibc (e)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN IIb", "SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Main source for IIb/Ib/Ic child priors."
+        }
+      ],
+      "notes": "Extended stripped-envelope aggregate prior; draws from children."
+    },
+    "SN Ibc (w)": {
+      "status": "aggregate",
+      "distribution": "children_mixture",
+      "children": ["SN IIb", "SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn"],
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "children",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Main source for IIb/Ib/Ic child priors."
+        }
+      ],
+      "notes": "Wide stripped-envelope aggregate prior; draws from children."
+    },
+    "SN Ibn": {
+      "status": "proxy",
+      "distribution": "fixed",
+      "loc": -18.6,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "R",
+      "sources": [
+        {
+          "bibkey": "Pastorello2015Ibn",
+          "url": "https://arxiv.org/abs/1502.04946",
+          "note": "Transitional Ibn/IIn SN 2011hw was M_R=-18.59+/-0.25 and slightly fainter than the average of SNe Ibn."
+        }
+      ],
+      "notes": "Object/average proxy, not a robust population prior. The rate entry remains missing_direct_rate."
+    },
+    "SN Ic": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -17.66,
+      "scale": 1.18,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "B",
+      "sources": [
+        {
+          "bibkey": "Richardson2014AMD",
+          "url": "https://arxiv.org/abs/1403.5755",
+          "note": "Bias-corrected SN Ic distribution: MB=-17.66 with standard deviation 1.18."
+        },
+        {
+          "bibkey": "Drout2011Ibc",
+          "url": "https://arxiv.org/abs/1011.4959",
+          "note": "Alternative R-band Ibc study reports M_R=-18.3+/-0.6 for SNe Ic."
+        }
+      ],
+      "notes": "Uses Richardson B-band distribution; Drout R-band value kept as alternative context."
+    },
+    "SN Ic-BL": {
+      "status": "adopted",
+      "distribution": "normal",
+      "loc": -18.6,
+      "scale": 0.5,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "r",
+      "sources": [
+        {
+          "bibkey": "Taddia2019IcBL",
+          "url": "https://arxiv.org/abs/1811.09544",
+          "note": "PTF/iPTF Ic-BL sample: peak r-band absolute magnitudes average -18.6+/-0.5 mag."
+        },
+        {
+          "bibkey": "Drout2011Ibc",
+          "url": "https://arxiv.org/abs/1011.4959",
+          "note": "Alternative broad-lined Ic value M_R=-19.0+/-1.1."
+        }
+      ],
+      "notes": "Uses Taddia et al. r-band Ic-BL average; no r-to-B conversion is applied."
+    }
+  },
+  "fitclasses": {
+    "SLSN (e)": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "derived_from_children",
+      "parent": "SN CC (a)",
+      "children": ["SLSN-I", "SLSN-II"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": null, "minus": null},
+      "sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "Provides the adopted local SLSN-I rate."
+        },
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Provides the adopted local SLSN-II rate."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II CC and SLSN rates; exact subtype table values are not encoded here yet."
+        }
+      ],
+      "notes": "Aggregate SLSN class resolved as SLSN-I plus SLSN-II. Do not activate together with children."
+    },
+    "SLSN (w)": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "derived_from_children",
+      "parent": "SN CC (a)",
+      "children": ["SLSN-I", "SLSN-II"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": null, "minus": null},
+      "sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "Provides the adopted local SLSN-I rate."
+        },
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Provides the adopted local SLSN-II rate."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II CC and SLSN rates; exact subtype table values are not encoded here yet."
+        }
+      ],
+      "notes": "Wide SLSN class is taxonomically ambiguous because the Warp taxonomy also maps SN IIn into SLSN (w). The resolved default does not add IIn."
+    },
+    "SLSN-I": {
+      "rate_gpc3_yr": 35.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 25.0, "minus": 13.0},
+      "sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "PTF local SLSN-I rate, quoted as 35(+25,-13) Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Older low-redshift SLSN-I rate, 32(+77,-26) Gpc^-3 yr^-1 h71^3."
+        }
+      ],
+      "notes": "Adopted as the local hydrogen-poor SLSN-I default."
+    },
+    "SLSN-II": {
+      "rate_gpc3_yr": 151.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 151.0, "minus": 82.0},
+      "sources": [
+        {
+          "bibkey": "Quimby2013SLSN",
+          "url": "https://arxiv.org/abs/1302.0911",
+          "note": "Low-redshift SLSN-II rate, quoted as 151(+151,-82) Gpc^-3 yr^-1 h71^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II CC and SLSN rates; exact subtype table values are not encoded here yet."
+        }
+      ],
+      "notes": "Adopted because a cleaner current local SLSN-II-only rate was not encoded."
+    },
+    "SN CC (a)": {
+      "rate_gpc3_yr": 91000.0,
+      "status": "aggregate",
+      "rate_kind": "volumetric",
+      "parent": null,
+      "children": ["SN II (w)", "SN Ibc (w)", "SLSN (w)"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 15600.0, "minus": 12700.0},
+      "sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "PTF local core-collapse rate, 9.10(+1.56,-1.27)e-5 Mpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "ASAS-SN-II reports total ccSN rate 7.0(+1.0,-0.9)e-5 Mpc^-3 yr^-1 h70^3."
+        },
+        {
+          "bibkey": "Perley2020BTSII",
+          "url": "https://arxiv.org/abs/2009.01242",
+          "note": "BTS demographics paper; useful cross-check for local SN demographics."
+        }
+      ],
+      "notes": "All core-collapse aggregate. Do not activate together with subtype children."
+    },
+    "SN II (w)": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "children": ["SN II", "SN IIP", "SN IIb", "SN IIn"],
+      "fraction_of_parent": 0.699,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": null, "fraction_minus": null},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS subtype fractions for II-P, II-L and IIb."
+        },
+        {
+          "bibkey": "ColdHjorth2023IIn",
+          "url": "https://arxiv.org/abs/2301.03406",
+          "note": "Preferred IIn/CC fraction 0.047(+/-0.009), replacing the older LOSS IIn fraction in this aggregate."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Hydrogen-rich wide aggregate approximated as II-P + II-L + IIb + IIn. Do not activate with its children."
+    },
+    "SN II": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "children": ["SN IIP", "SN IIb", "SN IIn"],
+      "fraction_of_parent": 0.546,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": null, "fraction_minus": null},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS fractions: II-P 48.2% and II-L 6.4% of CCSNe."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2011LOSS",
+          "url": "https://arxiv.org/abs/1006.4612",
+          "note": "LOSS luminosity functions and subtype demographics; useful alternative for broad Type II splits."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Broad normal Type II aggregate represented as II-P + II-L because there is no separate SN IIL warpcoeff_v3 file."
+    },
+    "SN IIP": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.482,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.057, "fraction_minus": 0.056},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for SN II-P: 48.2%(+5.7,-5.6)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Resolved as parent CC rate multiplied by the LOSS subtype fraction."
+    },
+    "SN IIb": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.106,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.036, "fraction_minus": 0.031},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for SN IIb: 10.6%(+3.6,-3.1)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Resolved as parent CC rate multiplied by the LOSS subtype fraction."
+    },
+    "SN IIn": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.047,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.009, "fraction_minus": 0.009},
+      "sources": [
+        {
+          "bibkey": "ColdHjorth2023IIn",
+          "url": "https://arxiv.org/abs/2301.03406",
+          "note": "Preferred combined BTS/PTF IIn/CC ratio: 0.047 +/- 0.009."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "Older LOSS observed CCSN fraction for SN IIn: 8.8%(+3.3,-2.9)."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Resolved as parent CC rate multiplied by the preferred BTS/PTF IIn fraction."
+    },
+    "SN Ia (a)": {
+      "rate_gpc3_yr": 22800.0,
+      "status": "aggregate",
+      "rate_kind": "volumetric",
+      "parent": null,
+      "children": ["SN Ia (w)", "SN Ia-91T", "SN Ia-91bg", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 2000.0, "minus": 2000.0},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN total SN Ia rate for M_V,peak < -16.5: 2.28(+/-0.20)e4 Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Perley2020BTSII",
+          "url": "https://arxiv.org/abs/2009.01242",
+          "note": "BTS demographics paper; useful cross-check for local SN Ia demographics."
+        }
+      ],
+      "notes": "All-Ia aggregate. Do not activate with Ia subtype children."
+    },
+    "SN Ia (w)": {
+      "rate_gpc3_yr": 22800.0,
+      "status": "aggregate",
+      "rate_kind": "volumetric",
+      "parent": "SN Ia (a)",
+      "children": ["SN Ia-91T", "SN Ia-91bg", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 2000.0, "minus": 2000.0},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN total SN Ia rate for M_V,peak < -16.5: 2.28(+/-0.20)e4 Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2000IaPec",
+          "url": "https://arxiv.org/abs/astro-ph/0006292",
+          "note": "Older SN Ia peculiarity fractions; not used as the default."
+        }
+      ],
+      "notes": "Wide Ia aggregate used by the default broad sample. Do not activate together with Ia subtype children."
+    },
+    "SN Ia-91T": {
+      "rate_gpc3_yr": 850.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN Ia (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 160.0, "minus": 170.0},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN Ia-91T rate: 8.5(+1.6,-1.7)e2 Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2000IaPec",
+          "url": "https://arxiv.org/abs/astro-ph/0006292",
+          "note": "Older peculiarity fraction estimate; not used as the default."
+        }
+      ],
+      "notes": "Direct subtype rate from ASAS-SN Ia."
+    },
+    "SN Ia-91bg": {
+      "rate_gpc3_yr": 1400.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN Ia (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 500.0, "minus": 500.0},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "ASAS-SN Ia-91bg rate: 1.4(+/-0.5)e3 Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2000IaPec",
+          "url": "https://arxiv.org/abs/astro-ph/0006292",
+          "note": "Older peculiarity fraction estimate; not used as the default."
+        }
+      ],
+      "notes": "Direct subtype rate from ASAS-SN Ia."
+    },
+    "SN Ia-SC": {
+      "rate_gpc3_yr": 30.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN Ia (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 20.0, "minus": 20.0},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "Mapped from ASAS-SN Ia-03fg/Super-Chandra rate: 30(+/-20) Gpc^-3 yr^-1 h70^3."
+        }
+      ],
+      "alternative_sources": [],
+      "notes": "Warp fitclass SN Ia-SC is mapped to the ASAS-SN Ia-03fg/Super-Chandra subtype."
+    },
+    "SN Ia-pec": {
+      "rate_gpc3_yr": null,
+      "status": "missing_direct_rate",
+      "rate_kind": "derived_from_children",
+      "parent": "SN Ia (a)",
+      "children": ["SN Ia-SC", "SN Iax"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": null, "minus": null},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "Provides rates for several peculiar Ia children, but not a clean direct SN Ia-pec aggregate matching this Warp class."
+        },
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "Provides the Iax relative rate used for the Iax child entry."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2000IaPec",
+          "url": "https://arxiv.org/abs/astro-ph/0006292",
+          "note": "Older global Ia peculiarity estimate; not used as a direct Warp SN Ia-pec rate."
+        }
+      ],
+      "notes": "No clean direct rate for this exact Warp aggregate. Keep inactive unless explicitly allowing missing or defining a custom aggregate."
+    },
+    "SN Ia-pec (w)": {
+      "rate_gpc3_yr": null,
+      "status": "missing_direct_rate",
+      "rate_kind": "derived_from_children",
+      "parent": "SN Ia (a)",
+      "children": ["SN Ia-pec", "SN Ia-SC", "SN Iax"],
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": null, "minus": null},
+      "sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "Provides rates for several peculiar Ia children, but not a clean direct wide peculiar-Ia aggregate."
+        },
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "Provides the Iax relative rate used for the Iax child entry."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Li2000IaPec",
+          "url": "https://arxiv.org/abs/astro-ph/0006292",
+          "note": "Older global Ia peculiarity estimate; not used as a direct Warp SN Ia-pec (w) rate."
+        }
+      ],
+      "notes": "No clean direct rate for this exact Warp aggregate. Keep inactive unless explicitly allowing missing or defining a custom aggregate."
+    },
+    "SN Iax": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN Ia (a)",
+      "fraction_of_parent": 0.31,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.17, "fraction_minus": 0.13},
+      "sources": [
+        {
+          "bibkey": "Foley2013Iax",
+          "url": "https://arxiv.org/abs/1212.2209",
+          "note": "Estimated SN Iax rate: 31(+17,-13) per 100 SNe Ia."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "Used only as the parent Ia rate; the Iax fraction is not silently folded into the total Ia rate."
+        }
+      ],
+      "notes": "Resolved as parent Ia rate multiplied by the Foley et al. Iax fraction. This is intentionally represented as a parent fraction."
+    },
+    "SN Ib": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.071,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.031, "fraction_minus": 0.026},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for SN Ib: 7.1%(+3.1,-2.6)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Shivvers2016LOSS",
+          "url": "https://arxiv.org/abs/1609.02922",
+          "note": "Updated LOSS stripped-envelope reclassification; useful for future Ib/Ic split updates."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Resolved as parent CC rate multiplied by the LOSS subtype fraction."
+    },
+    "SN Ibc": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "children": ["SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn"],
+      "fraction_of_parent": 0.260,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.051, "fraction_minus": 0.048},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for all Ibc: 26.0%(+5.1,-4.8)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "PTF stripped-envelope rate 2.41(+0.81,-0.64)e-5 Mpc^-3 yr^-1 h70^3."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Aggregate stripped-envelope class. Do not activate with Ib/Ic/Ic-BL/Ibn children."
+    },
+    "SN Ibc (e)": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "children": ["SN Ibc", "SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn", "SN IIb"],
+      "fraction_of_parent": 0.365,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.055, "fraction_minus": 0.054},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for Ibc+IIb: 36.5%(+5.5,-5.4)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "PTF stripped-envelope rate; useful alternative aggregate."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Extended stripped-envelope aggregate including IIb. Do not activate with children."
+    },
+    "SN Ibc (w)": {
+      "rate_gpc3_yr": null,
+      "status": "aggregate",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "children": ["SN Ibc", "SN Ibc (e)", "SN Ib", "SN Ic", "SN Ic-BL", "SN Ibn", "SN IIb"],
+      "fraction_of_parent": 0.365,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.055, "fraction_minus": 0.054},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for Ibc+IIb: 36.5%(+5.5,-5.4)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Frohmaier2021PTF",
+          "url": "https://arxiv.org/abs/2010.15270",
+          "note": "PTF stripped-envelope rate; useful alternative aggregate."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Wide stripped-envelope aggregate including IIb. Do not activate with children."
+    },
+    "SN Ibn": {
+      "rate_gpc3_yr": null,
+      "status": "missing_direct_rate",
+      "rate_kind": "volumetric",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": null, "minus": null},
+      "sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports subtype rates including Ibn, but the exact table value has not been encoded here yet."
+        }
+      ],
+      "alternative_sources": [],
+      "notes": "No robust encoded direct Ibn rate in this JSON. Keep inactive until the exact ASAS-SN-II table value or another direct rate is added."
+    },
+    "SN Ic": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.149,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.042, "fraction_minus": 0.038},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "LOSS observed CCSN fraction for SN Ic: 14.9%(+4.2,-3.8)."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Shivvers2016LOSS",
+          "url": "https://arxiv.org/abs/1609.02922",
+          "note": "Updated LOSS stripped-envelope reclassification; useful for future Ib/Ic split updates."
+        },
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Resolved as parent CC rate multiplied by the LOSS subtype fraction."
+    },
+    "SN Ic-BL": {
+      "rate_gpc3_yr": null,
+      "status": "derived",
+      "rate_kind": "fraction_of_parent",
+      "parent": "SN CC (a)",
+      "fraction_of_parent": 0.040,
+      "uncertainty": {"plus": null, "minus": null, "fraction_plus": 0.020, "fraction_minus": 0.024},
+      "sources": [
+        {
+          "bibkey": "Smith2010LOSS",
+          "url": "https://arxiv.org/abs/1006.3899",
+          "note": "Uses the LOSS Ibc-pec fraction, 4.0%(+2.0,-2.4), as a proxy for the Ic-BL/Ibc-pec Warp class."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Pessi2025ASASSNII",
+          "url": "https://arxiv.org/abs/2508.10985",
+          "note": "Reports ASAS-SN-II subtype rates including Ic-BL; exact table values are not encoded here yet."
+        }
+      ],
+      "notes": "Uncertain proxy: Smith et al. tabulate Ibc-pec rather than a pure Ic-BL volumetric rate."
+    }
+  }
+}
