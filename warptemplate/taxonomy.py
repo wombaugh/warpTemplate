@@ -191,6 +191,7 @@ KNOWN_CLASSES = [
     "SLSN-II",
     "SN Ia-91T",
     "SN Ibn",
+    "TDE",
 ]
 
 # ----------------------------------------------------------------------
@@ -225,6 +226,7 @@ WARP_MAP_EXTENDED = {
     "SN Ia": "SN Ia (e)",
     "SN II": "SN II (e)",
     "SN Ib/c": "SN Ib/c (e)",
+    "TDE": "TDE (e)",
 }
 
 WARP_MAP_WIDE = {
@@ -239,6 +241,7 @@ WARP_MAP_WIDE = {
     "SN Ic (e)": "SN Ib/c (w)",
     "SN Ia (e)": "SN Ia (w)",
     "SN Ib/c (e)": "SN Ib/c (w)",
+    "TDE (e)": "TDE (w)",
 }
 
 WARP_MAP_ALL = {
@@ -248,6 +251,7 @@ WARP_MAP_ALL = {
     "SN Ia-pec (w)": "SN Ia (a)",
     "SN II (w)": "SN CC (a)",
     "SN Ia-91bg (w)": "SN Ia (a)",
+    "TDE (w)": "TDE (a)",
 }
 
 def add_warpclasses(
@@ -316,6 +320,8 @@ def add_warpclasses(
 # ----------------------------------------------------------------------
 
 TEMPLATE_CLOSE_TYPES = {
+    'TDE' : ['TDE (w)', 'TDE (e)', 'TDE'],
+    'SLSN I' : ['SLSN (w)', 'SLSN (e)', 'SLSN-I'],
     'PopIII' : ['SLSN (w)', 'SLSN (e)', 'SLSN-II', 'SLSN-I'],
     'SN II' : [
         'SN II', 

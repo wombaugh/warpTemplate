@@ -10,8 +10,10 @@ from .lightcurves import (
     plot_lightcurve_table,
 )
 from .corrections import get_template_correction
-from .types import TemplateCorrectionResult, FitLCResult
-from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES
+from .warpdatatypes import TemplateCorrectionResult, FitLCResult
+from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES, SN_REJECT
+from .peakfitting_gp import estimate_peak_flux_multiband, get_peak_colors
+from .openuniverse_registry import register_all, get_registered_names 
 
 __all__ = [
     "WarpedTimeSeriesSource",
@@ -26,4 +28,5 @@ __all__ = [
     "TemplateCorrectionResult",
     "FitLCResult",
     "add_warpclasses",
+    "register_all",    
 ]

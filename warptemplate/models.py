@@ -26,7 +26,7 @@ def get_warpedTimeSeriesModel(
     samplecorr_ebv=None,
     samplecorr_rv=3.1,
     samplecorr_bands=None,
-) -> sncosmo.Model:
+) -> sncosmo.Model | None:
     """
     Create a `sncosmo.Model` using a warped TimeSeriesSource with optional
     host galaxy and Milky Way dust extinction.
@@ -93,6 +93,10 @@ def get_warpedTimeSeriesModel(
         wave = np.asarray(corr["wave"], dtype=float)
         flux = np.asarray(corr["flux"], dtype=float)
     except KeyError as e:
+        if warpdata['success'] is False:
+            print('... warpfit failed, not creating model')
+            return None
+        print(warpdata)
         raise KeyError(
             f"Missing required warpdata key: {e}. "
             "Expected structure: warpdata['corrmodel']['phase'|'wave'|'flux']"
