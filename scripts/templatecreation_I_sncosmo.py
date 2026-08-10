@@ -451,6 +451,10 @@ def main():
                 mdict['peak_good'] = True
                 atleastone = 2
 
+            # Also store fitted peak info. Slightly inefficient, but not sure what is saved later
+            for peak_col_label in ['gp_ztfg-ztfr', 'gp_ztfr-ztfri']:
+                if peak_col_label in peakcol:
+                    mdict['peak_'+peak_col_label] = peakcol[peak_col_label]
             results[modelname].append(mdict)
 
             plotname = '{:.2}_{}_{}_{:.2}_{:.2}_{:.2}.png'.format(

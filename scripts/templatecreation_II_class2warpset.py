@@ -66,7 +66,8 @@ MIN_DRAW_PROB = 10**-99.    # Looks small, but thats how xchi2 survival function
 GOOD_WARPFIT_SF = 0.5
 
 # Fit properties for warped model
-FITPROP = ["t0", "amplitude", "hostebv"]
+# Note that hostebv is not included - it should be absorbed into the warp correction 
+FITPROP = ["t0", "amplitude"]
 
 # Max phases for warpfit, should probably be class depentent
 MAX_PHASES = {
@@ -89,8 +90,8 @@ def parse_args():
         type=int, default=11, help="Class index to process")
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 4),
-        help='Version string for input and output files (default: $VERSION or 4)'
+        default=os.environ.get('VERSION', 5),
+        help='Version string for input and output files (default: $VERSION or 5)'
     )
     parser.add_argument(
         "--fit-host-dust", action="store_true", default=True,
@@ -169,7 +170,7 @@ def get_salt_cosmofit(
     keys = [
         "z", "chisq", "ndof", "peakmag", "chidof", "id", "nbr_bands", "ndet",
         "class", "peakchi", "peakdet", "earlydet", "peakbands", "peak_good",
-        "presum", "postsum", "thendet", "postdet",
+        "presum", "postsum", "thendet", "postdet", "peak_gp_ztfg-ztfr", "peak_gp_ztfr-ztfri",
     ]
 
     for snfit in fitlist:
@@ -210,7 +211,7 @@ def get_timeseries_goodfit(
     keys = [
         "z", "chisq", "ndof", "peakmag", "chidof", "id", "nbr_bands", "ndet",
         "class", "peakchi", "peakdet", "earlydet", "peakbands", "peak_good",
-        "presum", "postsum", "thendet", "postdet",
+        "presum", "postsum", "thendet", "postdet", "peak_gp_ztfg-ztfr", "peak_gp_ztfr-ztfri",
     ]
 
     for snfit in fitlist:
@@ -491,7 +492,7 @@ def apply_floor_and_normalize(p, floor):
 KEYS_TO_CUT_ROW = [
     "Index", "chisq", "ndof", "_10", "earlydet", "peakbands",
     "presum", "postsum", "thendet", "postdet", "aic",
-    "peakchisqdof", "peakaic", "goodfit", "wresult",
+    "peakchisqdof", "peakaic", "goodfit", "wresult", 
 ]
 
 KEYS_TO_CUT_MDICT = [
@@ -550,10 +551,8 @@ def process_single_sn(
     goodfits = 0
     chicomp = {"prechi": [], "postsf": []}
 
-    for row in ordered.itertuples():
-        row = row._asdict()
-        row["class"] = row["_10"]
-#        print('...', row['model'])
+    for rowi, row in ordered.iterrows():
+        row = dict( row )
 
         # Skip SALT models for warping
         if re.search("salt", row["model"]):
@@ -598,6 +597,7 @@ def process_single_sn(
             original_template_name=row["model"],
             warpdata=mdict,
             z=float(row["z"]),
+            use_host_dust=False,      # Also when fitting with dust above, this should have been absorbed into the warp correction
             original_template_version=None,
         )
         if wm is None:
@@ -657,7 +657,6 @@ def process_single_sn(
                 tab[fitted_time_mask], wfitted_model, 
                 mdict['warpfit_tmin'], mdict['warpfit_tmax'],
                 min_gap=5, rel_dev_threshold=0.5, evo_dev_threshold=100)):
-#            print('... categorized too variable')
             fiteval = 'var'
             fout = os.path.join('/Users/jnordin/tmp/wmod/var',plotname)
         elif row["sf"] > 10**-99 and (wresult["chisq"] / wresult["ndof"]) < 8:
@@ -794,8 +793,6 @@ def main():
 
     for i, (id_value, group) in enumerate(dfall.groupby("id")):
         print(i, id_value)
-#        if not id_value=='ZTF18accnmri':
-#            continue
         result = process_single_sn(
             id_value=id_value,
             group=group,
@@ -811,7 +808,7 @@ def main():
         )
         if result is not None:
             full_warplist[id_value] = result
-#        if i>10:
+#        if i>1:
 #            break
 
     # Quality accounting
