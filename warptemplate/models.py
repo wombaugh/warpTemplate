@@ -189,8 +189,8 @@ def get_warpedTimeSeriesModel(
 
     if use_host_dust and hostr_v is not None:
         model.set(hostr_v=hostr_v)
-    elif not use_host_dust and hostr_v is not None:
-        warnings.warn("hostr_v ignored because use_host_dust=False")
+#    elif not use_host_dust and hostr_v is not None:
+#        warnings.warn("hostr_v ignored because use_host_dust=False")
 
     if use_mw_dust:
         model.set(mwebv=mwebv)

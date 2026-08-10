@@ -764,18 +764,27 @@ def get_template_correction(
         mdict['success'] = False
         return mdict
 
+
     # -------------------------
     # Build correction
     # -------------------------
     startphase = max(m.mintime(), max_phases[0])
     endphase = min(m.maxtime(), max_phases[1])
 
-    corr_frac = tab['flux'] / fitted_model.bandflux(
-        tab['band'], tab['time'], zp=25, zpsys='ab'
-    )
-    # Need to scale the errors as well - somehow ?
-    err_frac = tab['fluxerr'] / tab['flux']
+    # If fit with host dust, remove host dust to compute correction factors relative to dust-free model
+    if fit_host_dust and mdict.get('hostebv', 0) != 0:
+        # dustfree_model = fitted_model.copy()  # do we need this?
+        fitted_model.set(hostebv=0.0)
+        model_flux = fitted_model.bandflux(
+            tab['band'], tab['time'], zp=25, zpsys='ab'
+        )
+    else:
+        model_flux = fitted_model.bandflux(
+            tab['band'], tab['time'], zp=25, zpsys='ab'
+        )
 
+    corr_frac = tab['flux'] / model_flux
+    err_frac = tab['fluxerr'] / tab['flux']
 
     mdict['corrdata'] = {}
 
