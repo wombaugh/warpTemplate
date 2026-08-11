@@ -17,8 +17,8 @@ from .lightcurves import (
     plot_lightcurve_table,
 )
 from .corrections import get_template_correction
-from .types import TemplateCorrectionResult, FitLCResult
-from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES
+from .warpdatatypes import TemplateCorrectionResult, FitLCResult
+from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES, SN_REJECT
 from .population import (
     DEFAULT_ACTIVE_FITCLASSES_BROAD,
     DEFAULT_ACTIVE_FITCLASSES_IA_SUBTYPE,
@@ -36,6 +36,8 @@ from .population import (
     validate_rate_config,
 )
 from .observer_population import draw_observer_redshift, observer_expected_count
+from .peakfitting_gp import estimate_peak_flux_multiband, get_peak_colors
+from .openuniverse_registry import get_registered_names, register_all
 
 __all__ = [
     "WarpedTimeSeriesSource",
@@ -60,6 +62,7 @@ __all__ = [
     "FitLCResult",
     "add_warpclasses",
     "TEMPLATE_CLOSE_TYPES",
+    "SN_REJECT",
     "DEFAULT_ACTIVE_FITCLASSES_BROAD",
     "DEFAULT_ACTIVE_FITCLASSES_IA_SUBTYPE",
     "MissingMagnitudePriorError",
@@ -76,4 +79,8 @@ __all__ = [
     "validate_active_fitclasses",
     "validate_magabs_config",
     "validate_rate_config",
+    "estimate_peak_flux_multiband",
+    "get_peak_colors",
+    "get_registered_names",
+    "register_all",
 ]

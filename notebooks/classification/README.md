@@ -17,15 +17,16 @@ The notebooks expect this workspace layout for WarpTemplate and generated data:
 ```text
 warp_templates/
 ├── training_samples/              generated Parquet samples
-└── warpTemplate/                  this package and notebooks
+└── warpTemplate/                  repository checkout
 ```
 
 Use a kernel that provides the astronomical
-[LSSTDESC ParSNIP](https://github.com/LSSTDESC/parsnip), SuperNNova, PyTorch,
-LightGBM, `lcdata`, and the optional classifier dependencies. The notebooks
-intentionally import ParSNIP and SuperNNova from that kernel before adding the
-workspace path for the local WarpTemplate checkout. Reference source folders
-beside this repository are therefore never runtime dependencies. The unrelated
+[LSSTDESC ParSNIP](https://github.com/LSSTDESC/parsnip), PyTorch, LightGBM,
+`lcdata`, and the optional classifier dependencies. The ParSNIP notebook
+imports ParSNIP from that kernel before adding the workspace path for the local
+WarpTemplate checkout. The recurrent workflow uses the local
+`WarpSequenceRNN`; reference source folders beside this repository are not
+runtime dependencies. The unrelated
 PyPI parser that also uses the name `parsnip` does not provide the required
 `ParsnipModel` and `Classifier` APIs and is rejected with an actionable error.
 

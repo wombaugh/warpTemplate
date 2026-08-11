@@ -1,8 +1,22 @@
-"""Shared splitting, ParSNIP adaptation, evaluation, and experiment utilities.
+"""Shared data preparation and evaluation code for classifier experiments.
 
-The functions in this module deliberately keep the observation Parquet tree as the
-single source of photometry.  Split manifests contain only object-level metadata;
-notebooks select observations by ``object_id`` when a partition is needed.
+The module is the model-independent part of the classification workflow.  A typical
+run follows this order:
+
+1. load the simulated object truth and irregular photometric observations;
+2. merge the simulated labels into :data:`FINAL_CLASSES`;
+3. create group-safe train, validation, and test partitions;
+4. adapt a selected partition to the input contract of a classifier;
+5. convert its predictions to one common table and calculate comparable metrics; and
+6. persist enough configuration and source provenance to reproduce the result.
+
+The observation Parquet tree deliberately remains the single source of photometry.
+A split manifest stores only one row per object and never duplicates light curves.
+When a model needs a partition, its observations are selected through ``object_id``.
+This separation makes it harder to train accidentally on held-out observations.
+
+Although the ParSNIP adapter lives here, the split, metric, and artifact functions
+are also used by the recurrent SuperNNova backend.
 """
 
 from __future__ import annotations
@@ -27,6 +41,12 @@ import numpy as np
 import pandas as pd
 
 
+# -----------------------------------------------------------------------------
+# Shared scientific conventions
+# -----------------------------------------------------------------------------
+
+# The tuple order is part of the prediction-file contract: probability column i
+# always describes class i in this tuple.
 FINAL_CLASSES = (
     "SLSN",
     "SN IIP",
@@ -67,7 +87,28 @@ PARSNIP_ZEROPOINT = 25.0
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    """Serializable identity and configuration for one classifier experiment."""
+    """Describe one classifier run independently of its fitted model object.
+
+    Parameters
+    ----------
+    training_sample, evaluation_sample:
+        Stable names of the simulated samples used to fit and evaluate the model.
+    backend:
+        Classifier implementation, for example ``"parsnip"`` or ``"supernnova"``.
+    redshift_mode:
+        Declares whether and which redshift information is available to the model.
+        It is recorded explicitly because it changes the scientific comparison.
+    split_strategy:
+        Column used to group related simulations before assigning folds.  Related
+        objects must not occur in different partitions.
+    seed:
+        Root random seed for deterministic splitting and training.
+    model_config:
+        Backend-specific hyperparameters that contribute to the run identity.
+    run_id:
+        Optional human-supplied label.  If absent, :meth:`normalized` derives a
+        deterministic identifier from the scientific configuration.
+    """
 
     training_sample: str
     evaluation_sample: str
@@ -79,15 +120,25 @@ class ExperimentConfig:
     run_id: str | None = None
 
     def normalized(self) -> dict[str, Any]:
-        """Return a stable JSON-compatible configuration mapping."""
+        """Return a JSON-compatible mapping with a deterministic ``run_id``."""
         payload = asdict(self)
         payload["model_config"] = dict(self.model_config or {})
         payload["run_id"] = self.run_id or make_run_id(payload)
         return payload
 
 
+# -----------------------------------------------------------------------------
+# Reproducibility, taxonomy, and sample input
+# -----------------------------------------------------------------------------
+
+
 def set_random_seed(seed: int) -> None:
-    """Seed Python, NumPy, and PyTorch when PyTorch is installed."""
+    """Seed the random-number generators used by both classifier backends.
+
+    PyTorch is optional for the ParSNIP workflow, so its generators are seeded only
+    when the package is installed.  This function controls stochastic software but
+    cannot make nondeterministic GPU kernels deterministic by itself.
+    """
     random.seed(seed)
     np.random.seed(seed)
     try:
@@ -101,7 +152,12 @@ def set_random_seed(seed: int) -> None:
 
 
 def merge_fitclasses(labels: Iterable[str]) -> pd.Series:
-    """Map raw fit classes into the fixed seven-class taxonomy."""
+    """Map simulated template labels into the fixed seven-class taxonomy.
+
+    Unknown labels raise an error instead of silently becoming missing values.  This
+    keeps a newly introduced simulation class from changing the training set without
+    an explicit taxonomy decision.
+    """
     series = pd.Series(labels, copy=False)
     unknown = sorted(set(series.dropna()) - set(CLASS_MAP))
     if unknown:
@@ -114,7 +170,12 @@ def _read_parquet_files(
     columns: Sequence[str] | None = None,
     object_ids: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Read selected Parquet files, optionally retaining only requested objects."""
+    """Read Parquet fragments, optionally filtering objects before conversion.
+
+    Filtering is performed by PyArrow while the data are still columnar.  This is
+    important for large samples because a notebook can request one split without
+    first materializing the complete observation table as a pandas DataFrame.
+    """
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
@@ -162,7 +223,12 @@ def load_parquet_tree(path: str | Path, columns: Sequence[str] | None = None) ->
 
 
 def sample_table_files(sample_dir: str | Path, table: str) -> list[Path]:
-    """Return schema-5 or schema-6 ensemble Parquet files for one logical table."""
+    """Find one logical truth or observation table in a supported sample layout.
+
+    A direct sample stores ``truth/`` and ``observations/`` immediately below its
+    root.  An ensemble stores those directories below realization subdirectories.
+    Mixing both layouts is treated as ambiguous rather than reading duplicate data.
+    """
     if table not in {"truth", "observations"}:
         raise ValueError("table must be 'truth' or 'observations'")
     sample_dir = Path(sample_dir)
@@ -190,7 +256,11 @@ def load_sample_truth(
     sample_dir: str | Path,
     columns: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Load object-level truth from a direct run or realization ensemble."""
+    """Load one object-level truth row per simulated transient.
+
+    ``columns`` can restrict the schema when only split metadata or redshift is
+    required.  The returned table is not joined to the many-row observation table.
+    """
     return _read_parquet_files(sample_table_files(sample_dir, "truth"), columns=columns)
 
 
@@ -199,7 +269,11 @@ def load_sample_observations(
     columns: Sequence[str] | None = None,
     object_ids: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Load all or selected observations from either supported sample layout."""
+    """Load irregular light-curve measurements from either supported layout.
+
+    Each returned row is one measurement in one passband.  Supplying ``object_ids``
+    performs early filtering and is the preferred way to load a model partition.
+    """
     return _read_parquet_files(
         sample_table_files(sample_dir, "observations"),
         columns=columns,
@@ -212,7 +286,11 @@ def load_training_sample(
     truth_columns: Sequence[str] | None = None,
     observation_columns: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-    """Load all truth and observations from a direct run or realization ensemble."""
+    """Load truth, observations, and the source manifest as one convenience tuple.
+
+    Use the individual loading functions for large training samples where loading
+    every observation at once would defeat the streaming design.
+    """
     truth = load_sample_truth(sample_dir, truth_columns)
     observations = load_sample_observations(sample_dir, observation_columns)
     source_manifest = load_sample_manifest(sample_dir)
@@ -220,7 +298,12 @@ def load_training_sample(
 
 
 def audit_sample_observations(sample_dir: str | Path) -> dict[str, Any]:
-    """Scan observation files with bounded memory and summarize their input contract."""
+    """Audit the observation schema without retaining the full sample in memory.
+
+    Returns row and object counts, counts by passband, and the number of rows with a
+    non-finite numeric value or non-positive uncertainty.  These are input-contract
+    checks, not astrophysical quality cuts.
+    """
     import pyarrow.parquet as pq
 
     row_count = 0
@@ -248,7 +331,13 @@ def rescale_flux_to_zeropoint(
     observations: pd.DataFrame,
     target_zeropoint: float = PARSNIP_ZEROPOINT,
 ) -> pd.DataFrame:
-    """Rescale flux and uncertainty while preserving the corresponding AB magnitude."""
+    """Express fluxes at one zeropoint without changing magnitudes or S/N.
+
+    ``flux`` values are meaningful only together with their photometric zeropoint
+    ``zp``.  Multiplying flux and uncertainty by the same factor changes the numeric
+    convention expected by a classifier while preserving both the implied AB
+    magnitude and the signal-to-noise ratio.  The input DataFrame is not modified.
+    """
     required = {"flux", "fluxerr", "zp"}
     missing = required - set(observations)
     if missing:
@@ -266,12 +355,35 @@ def rescale_flux_to_zeropoint(
 def group_observing_epochs(
     observations: pd.DataFrame,
     window_days: float = DEFAULT_EPOCH_WINDOW_DAYS,
+    duplicate_strategy: str = "best_error",
 ) -> pd.DataFrame:
-    """Apply SuperNNova-style 0.33-day grouping and duplicate-band selection."""
-    required = {"object_id", "mjd", "band", "fluxerr"}
+    """Group nearby measurements into the time steps consumed by sequence models.
+
+    Parameters
+    ----------
+    observations:
+        Long-form photometry containing at least object, time, passband, flux, and
+        uncertainty columns.
+    window_days:
+        Maximum time from an epoch's *anchor measurement*.  Comparing to an anchor,
+        rather than chaining adjacent times, prevents a dense series of exposures
+        from joining an arbitrarily long interval.
+    duplicate_strategy:
+        ``"best_error"`` keeps the most precise measurement of a band in an epoch.
+        ``"inverse_variance"`` combines independent repeats with inverse-variance
+        weights and retains ancillary values from the most precise row.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per object, grouped epoch, and band, with ``grouped_mjd`` added.
+    """
+    required = {"object_id", "mjd", "band", "flux", "fluxerr"}
     missing = required - set(observations)
     if missing:
         raise ValueError(f"Missing epoch-grouping columns: {sorted(missing)}")
+    if duplicate_strategy not in {"best_error", "inverse_variance"}:
+        raise ValueError(f"Unsupported duplicate strategy: {duplicate_strategy!r}")
     ordered = observations.sort_values(["object_id", "mjd", "fluxerr"]).copy()
     grouped_mjd = np.empty(len(ordered), dtype=float)
 
@@ -289,13 +401,30 @@ def group_observing_epochs(
         cursor += len(group)
     ordered["grouped_mjd"] = grouped_mjd
 
-    # Retain the statistically most precise measurement if a band repeats in an epoch.
-    grouped = (
-        ordered.sort_values("fluxerr")
-        .drop_duplicates(["object_id", "grouped_mjd", "band"], keep="first")
-        .sort_values(["object_id", "grouped_mjd", "band"])
-        .reset_index(drop=True)
-    )
+    keys = ["object_id", "grouped_mjd", "band"]
+    if duplicate_strategy == "best_error":
+        # This reproduces the historical SuperNNova adapter exactly.
+        grouped = ordered.sort_values("fluxerr").drop_duplicates(keys, keep="first")
+    else:
+        # Independent repeated measurements carry additive inverse variance.  Keep
+        # ancillary columns from the most precise row but replace flux and error with
+        # the statistically efficient combined measurement.
+        weighted = ordered.assign(
+            _inverse_variance=1.0 / np.square(ordered["fluxerr"].to_numpy(dtype=float))
+        )
+        weighted["_weighted_flux"] = weighted["flux"] * weighted["_inverse_variance"]
+        combined = weighted.groupby(keys, sort=False).agg(
+            _weighted_flux=("_weighted_flux", "sum"),
+            _inverse_variance=("_inverse_variance", "sum"),
+        )
+        grouped = weighted.sort_values("fluxerr").drop_duplicates(keys, keep="first")
+        grouped = grouped.set_index(keys)
+        grouped["flux"] = combined["_weighted_flux"] / combined["_inverse_variance"]
+        grouped["fluxerr"] = np.sqrt(1.0 / combined["_inverse_variance"])
+        grouped = grouped.reset_index().drop(
+            columns=["_inverse_variance", "_weighted_flux"]
+        )
+    grouped = grouped.sort_values(keys).reset_index(drop=True)
     return grouped
 
 
@@ -312,7 +441,12 @@ def grouped_epoch_counts_from_sample(
     sample_dir: str | Path,
     window_days: float = DEFAULT_EPOCH_WINDOW_DAYS,
 ) -> pd.Series:
-    """Count grouped epochs across a large sample without loading it into memory."""
+    """Count grouped epochs file by file with bounded memory use.
+
+    The streaming implementation assumes that all rows of an object reside in one
+    observation fragment.  It raises if that storage invariant is violated, because
+    otherwise epochs near a file boundary could be counted twice.
+    """
     import pyarrow.parquet as pq
 
     counts: dict[str, int] = {}
@@ -343,7 +477,12 @@ def grouped_epoch_counts_from_sample(
 
 
 def _active_groups(truth: pd.DataFrame, strategy: str) -> pd.Series:
-    """Build leakage groups for a supported split strategy."""
+    """Return the provenance group that must remain in a single partition.
+
+    Several noisy realizations may descend from the same simulated template.  Such
+    realizations are not statistically independent and therefore share a group ID.
+    ``basis_sn`` is class-qualified because basis names can recur across classes.
+    """
     if strategy == "template_key":
         if "template_key" not in truth:
             raise ValueError("template_key is required for template_key splitting")
@@ -366,7 +505,23 @@ def create_grouped_split_manifest(
     epoch_window_days: float = DEFAULT_EPOCH_WINDOW_DAYS,
     epoch_counts: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Create deterministic stratified group folds and an exclusion manifest."""
+    """Create deterministic, class-stratified folds without provenance leakage.
+
+    Objects with fewer than ``min_grouped_epochs`` are excluded before splitting.
+    :class:`sklearn.model_selection.StratifiedGroupKFold` then approximately balances
+    the final seven classes while assigning every provenance group to exactly one
+    fold.  Fold 0 is frozen as test, fold 1 as validation, and folds 2 onward as
+    training.  A *fold* is therefore a reusable subset; a *split* is its experiment
+    role.
+
+    Exactly one of ``observations`` or precomputed ``epoch_counts`` must be supplied.
+
+    Returns
+    -------
+    manifest, excluded:
+        The first table has one retained object per row with fold, split, label, and
+        group metadata.  The second records every removed object and its reason.
+    """
     from sklearn.model_selection import StratifiedGroupKFold
 
     if truth["object_id"].duplicated().any():
@@ -440,7 +595,11 @@ def create_grouped_split_manifest(
 
 
 def validate_split_manifest(manifest: pd.DataFrame) -> None:
-    """Assert object uniqueness, partition completeness, and zero group leakage."""
+    """Validate the invariants on which leakage-free evaluation depends.
+
+    Validation is intentionally repeated whenever a saved manifest is loaded.  A
+    malformed artifact must fail before observations are selected or a model is fit.
+    """
     required = {"object_id", "group_id", "fold", "split", "final_label"}
     missing = required - set(manifest)
     if missing:
@@ -488,7 +647,12 @@ def prepare_persistent_split(
     seed: int = DEFAULT_SPLIT_SEED,
     overwrite: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load a saved split or create, validate, and persist it once."""
+    """Load a frozen split or create and persist it as an experiment artifact.
+
+    Reusing the same manifest ensures that different backends see identical objects.
+    Existing artifacts are never silently rebuilt; ``overwrite=True`` is required
+    when the caller deliberately changes the split definition or source sample.
+    """
     artifact_dir = Path(artifact_dir)
     split_path = artifact_dir / f"split_{strategy}_seed{seed}.parquet"
     excluded_path = artifact_dir / "excluded_objects.parquet"
@@ -539,7 +703,11 @@ def select_partition_rows(
     split_manifest: pd.DataFrame,
     partition: str | Sequence[str],
 ) -> pd.DataFrame:
-    """Select observation rows through object IDs without copying source storage."""
+    """Select all measurements belonging to one or more named partitions.
+
+    ``observations`` may be an in-memory table or a sample directory.  For a directory
+    the object filter is pushed into the Parquet read, avoiding a full-sample load.
+    """
     partitions = {partition} if isinstance(partition, str) else set(partition)
     ids = set(split_manifest.loc[split_manifest["split"].isin(partitions), "object_id"])
     if isinstance(observations, (str, Path)):
@@ -554,7 +722,12 @@ def sample_balanced_object_ids(
     seed: int = DEFAULT_SPLIT_SEED,
     folds: Sequence[int] | None = None,
 ) -> list[str]:
-    """Draw a deterministic class-balanced object subset from one partition."""
+    """Draw a reproducible, approximately equal-size subset of every final class.
+
+    This is used for smoke tests and runtime estimates, not for the full scientific
+    sample.  If a class contains fewer than ``per_class`` objects, all its objects are
+    returned rather than sampling with replacement.
+    """
     selected = split_manifest.loc[split_manifest["split"] == partition]
     if folds is not None:
         selected = selected.loc[selected["fold"].isin(folds)]
@@ -591,8 +764,18 @@ def _select_lcdata_metadata(
     return selected[metadata_columns].copy()
 
 
+# -----------------------------------------------------------------------------
+# ParSNIP/lcdata adaptation
+# -----------------------------------------------------------------------------
+
+
 def _prepare_lcdata_observations(observations: pd.DataFrame) -> pd.DataFrame:
-    """Apply the ParSNIP zeropoint, band, finiteness, and ordering contract."""
+    """Translate Warp observation columns into ParSNIP's validated input schema.
+
+    The adapter standardizes the zeropoint, renames time, fixes column order, and
+    rejects unknown filters, non-finite values, or invalid uncertainties.  Sorting is
+    part of the contract because downstream light-curve encoders assume time order.
+    """
     converted = rescale_flux_to_zeropoint(observations, PARSNIP_ZEROPOINT)
     unknown_bands = sorted(set(converted["band"]) - set(EXPECTED_BANDS))
     if unknown_bands:
@@ -613,7 +796,21 @@ def to_lcdata_from_sample(
     sample_dir: str | Path,
     object_ids: Sequence[str] | None = None,
 ):
-    """Build lcdata batchwise from a large direct or ensemble Parquet sample."""
+    """Build an :mod:`lcdata` dataset from a large sample using bounded-memory reads.
+
+    Observation fragments are converted separately and combined only after their
+    selected light curves have been validated.  The function also enforces the sample
+    storage invariant that one object cannot cross multiple Parquet fragments.
+
+    Parameters
+    ----------
+    truth:
+        Object metadata containing ``object_id``, ``fitclass``, and redshift ``z``.
+    sample_dir:
+        Root of a direct or ensemble Warp sample.
+    object_ids:
+        Optional ordered subset.  This is normally obtained from a split manifest.
+    """
     from astropy.table import Table, vstack
     import lcdata
     import pyarrow as pa
@@ -658,7 +855,12 @@ def to_lcdata(
     observations: pd.DataFrame | str | Path,
     object_ids: Sequence[str] | None = None,
 ):
-    """Convert selected simulated photometry to a validated ParSNIP/lcdata dataset."""
+    """Convert selected Warp photometry to ParSNIP's :mod:`lcdata` representation.
+
+    ``observations`` can be either an in-memory long table or a sample path.  In both
+    cases the result contains object metadata plus one chronologically ordered light
+    curve per object.  No feature extraction or classifier fitting happens here.
+    """
     from astropy.table import Table
     import lcdata
 
@@ -684,7 +886,7 @@ def dataset_for_partition(
     split_manifest: pd.DataFrame,
     partition: str | Sequence[str],
 ):
-    """Build an lcdata dataset for one or more named partitions."""
+    """Build an :mod:`lcdata` dataset using object IDs from named split roles."""
     partitions = {partition} if isinstance(partition, str) else set(partition)
     ids = split_manifest.loc[split_manifest["split"].isin(partitions), "object_id"].tolist()
     return to_lcdata(truth, observations, object_ids=ids)
@@ -721,7 +923,14 @@ def tune_parsnip_classifier(
     validation_representations,
     min_child_weights: Sequence[float] = (1.0, 10.0, 30.0),
 ) -> tuple[Any, pd.DataFrame]:
-    """Select ParSNIP's class-reweighted LightGBM model on validation log loss."""
+    """Select a ParSNIP LightGBM hyperparameter on held-out validation data.
+
+    A separate classifier is fit for each ``min_child_weight``.  Training examples
+    are class-reweighted, and selection uses class-balanced multiclass log loss so
+    abundant classes do not dominate the choice.  The test fold is never consulted.
+
+    Returns the selected fitted classifier and a score table sorted best first.
+    """
     import parsnip
 
     labels = np.asarray(train_representations["type"]).astype(str)
@@ -753,7 +962,12 @@ def refit_parsnip_classifier(
     validation_representations,
     min_child_weight: float,
 ):
-    """Refit the selected ParSNIP LightGBM classifier on train plus validation."""
+    """Refit the selected ParSNIP classifier on train plus validation examples.
+
+    Hyperparameter selection must be complete before this call.  Combining these two
+    roles uses all non-test data for the final fit while leaving the frozen test fold
+    untouched for a single unbiased evaluation.
+    """
     from astropy.table import vstack
     import parsnip
 
@@ -778,6 +992,11 @@ def _classification_probabilities(classifications, class_order: Sequence[str]) -
     return np.column_stack([np.asarray(classifications[label], dtype=float) for label in class_order])
 
 
+# -----------------------------------------------------------------------------
+# Model-neutral predictions and evaluation
+# -----------------------------------------------------------------------------
+
+
 def standardize_predictions(
     classifications,
     split_manifest: pd.DataFrame,
@@ -785,7 +1004,13 @@ def standardize_predictions(
     partition: str = "test",
     class_order: Sequence[str] = FINAL_CLASSES,
 ) -> pd.DataFrame:
-    """Create the model-neutral per-object prediction table."""
+    """Convert backend output into the common, validated prediction-table schema.
+
+    The function verifies finite non-negative probabilities, unit row sums, known
+    object IDs, and membership in the requested partition.  Output columns include
+    the true and winning class, one probability per class, and experiment identity
+    fields.  Downstream metrics therefore do not depend on a backend's native format.
+    """
     payload = config.normalized() if isinstance(config, ExperimentConfig) else dict(config)
     ids = np.asarray(classifications["object_id"]).astype(str)
     probabilities = _classification_probabilities(classifications, class_order)
@@ -817,7 +1042,7 @@ def standardize_predictions(
 
 
 def inverse_frequency_weights(labels: Sequence[str]) -> np.ndarray:
-    """Return weights giving every represented class equal aggregate weight."""
+    """Return per-object weights giving each represented class equal total mass."""
     labels = np.asarray(labels).astype(str)
     classes, counts = np.unique(labels, return_counts=True)
     per_class = {label: len(labels) / (len(classes) * count) for label, count in zip(classes, counts)}
@@ -829,7 +1054,12 @@ def class_balanced_log_loss(
     probabilities: np.ndarray,
     class_order: Sequence[str] = FINAL_CLASSES,
 ) -> float:
-    """Compute multiclass log loss with equal total weight per represented class."""
+    """Compute probability-sensitive loss with equal aggregate weight per class.
+
+    Log loss rewards probability assigned to the true class and penalizes confident
+    mistakes.  Equal class mass prevents a frequent class from determining the score.
+    Probabilities are clipped only to keep ``log(0)`` numerically finite.
+    """
     from sklearn.metrics import log_loss
 
     true_labels = np.asarray(true_labels).astype(str)
@@ -850,7 +1080,13 @@ def compute_classification_metrics(
     class_order: Sequence[str] = FINAL_CLASSES,
     calibration_bins: int = 10,
 ) -> dict[str, Any]:
-    """Compute the shared scalar, per-class, Brier, and calibration metrics."""
+    """Calculate the backend-independent classification metric bundle.
+
+    Besides ordinary and balanced accuracy, the result contains macro F1, top-two
+    accuracy, multiclass Brier score, class-balanced log loss, per-class statistics,
+    and confidence-bin calibration information.  The expected calibration error is
+    the count-weighted gap between mean confidence and accuracy in each nonempty bin.
+    """
     from sklearn.metrics import (
         accuracy_score,
         balanced_accuracy_score,
@@ -923,7 +1159,12 @@ def group_bootstrap_confidence_intervals(
     repeats: int = 1000,
     seed: int = DEFAULT_SPLIT_SEED,
 ) -> dict[str, dict[str, float]]:
-    """Bootstrap evaluation groups and return 95% intervals for primary metrics."""
+    """Estimate metric uncertainty by resampling independent provenance groups.
+
+    All objects derived from a selected group are resampled together.  Resampling
+    individual objects would treat related template realizations as independent and
+    would usually produce intervals that are too narrow.
+    """
     merged = predictions.merge(split_manifest[["object_id", "group_id"]], on="object_id", how="left")
     if merged["group_id"].isna().any():
         raise ValueError("Every prediction must map to a split group")
@@ -954,7 +1195,7 @@ def group_bootstrap_confidence_intervals(
 
 
 def summarize_light_curves(observations: pd.DataFrame) -> pd.DataFrame:
-    """Summarize cadence, S/N, and survey coverage for stratified evaluation."""
+    """Reduce long-form photometry to per-object cadence, S/N, and survey coverage."""
     data = observations.copy()
     data["snr"] = np.abs(data["flux"]) / data["fluxerr"]
     data["survey"] = np.where(data["band"].astype(str).str.startswith("ztf"), "ZTF", "LSST")
@@ -991,7 +1232,12 @@ def metric_breakdowns(
     observations: pd.DataFrame,
     class_order: Sequence[str] = FINAL_CLASSES,
 ) -> pd.DataFrame:
-    """Evaluate primary metrics versus redshift, cadence, S/N, and coverage."""
+    """Evaluate whether performance changes with redshift or observing conditions.
+
+    Continuous variables are split into sample quantiles rather than fixed physical
+    bins so each reported subset normally contains enough objects for a useful score.
+    These diagnostic slices supplement, rather than replace, the primary test metric.
+    """
     features = summarize_light_curves(observations).merge(
         truth[["object_id", "z"]], on="object_id", how="left"
     )
@@ -1037,7 +1283,7 @@ def metric_breakdowns(
 
 
 def configuration_hash(config: Mapping[str, Any]) -> str:
-    """Hash an experiment configuration using canonical JSON serialization."""
+    """Hash scientific settings using order-independent JSON serialization."""
     # A user-facing run label does not change the scientific configuration identity.
     canonical = {key: value for key, value in config.items() if key != "run_id"}
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str).encode()
@@ -1051,8 +1297,13 @@ def make_run_id(config: Mapping[str, Any]) -> str:
     return f"{backend}_{redshift}_{configuration_hash(config)}"
 
 
+# -----------------------------------------------------------------------------
+# Frozen artifacts, provenance, and comparison safeguards
+# -----------------------------------------------------------------------------
+
+
 def run_directory(root: str | Path, config: ExperimentConfig | Mapping[str, Any]) -> Path:
-    """Return the standard output directory for an experiment."""
+    """Return the deterministic output path implied by an experiment identity."""
     payload = config.normalized() if isinstance(config, ExperimentConfig) else dict(config)
     run_id = payload.get("run_id") or make_run_id(payload)
     return (
@@ -1065,7 +1316,12 @@ def run_directory(root: str | Path, config: ExperimentConfig | Mapping[str, Any]
 
 
 def module_source_provenance(module_name: str) -> dict[str, str]:
-    """Return the loaded module path and a deterministic Python-source hash."""
+    """Fingerprint the Python source that was actually imported for a module.
+
+    Recording only a package version can be ambiguous for editable installs or local
+    checkouts.  The resolved path and a hash over its Python sources identify the code
+    used by the running interpreter more directly.
+    """
 
     try:
         module = importlib.import_module(module_name)
@@ -1121,7 +1377,7 @@ def build_experiment_metadata(
     split_manifest: pd.DataFrame,
     status: str = "configured",
 ) -> dict[str, Any]:
-    """Build the frozen metadata record shared by classifier backends."""
+    """Build the frozen configuration, split summary, and software provenance record."""
     payload = config.normalized()
     return {
         **payload,
@@ -1160,7 +1416,11 @@ def assert_comparable_experiments(
     first: ExperimentConfig | Mapping[str, Any],
     second: ExperimentConfig | Mapping[str, Any],
 ) -> None:
-    """Reject direct comparisons with different evaluation samples or split strategies."""
+    """Reject scores that do not share an evaluation sample and split definition.
+
+    A numeric difference is not a paired model comparison when it was measured on
+    different objects or under a different leakage-grouping rule.
+    """
     left = first.normalized() if isinstance(first, ExperimentConfig) else first
     right = second.normalized() if isinstance(second, ExperimentConfig) else second
     mismatches = [
@@ -1177,7 +1437,7 @@ def detect_held_out_group_leakage(
     evaluation_manifest: pd.DataFrame,
     evaluation_partition: str = "test",
 ) -> set[str]:
-    """Return groups occurring in both training objects and a frozen evaluation set."""
+    """Return provenance groups shared by training and a held-out evaluation role."""
     training_groups = set(
         training_manifest.loc[training_manifest["split"] == "train", "group_id"].astype(str)
     )
@@ -1209,7 +1469,11 @@ def estimate_parsnip_training_time(
     full_objects: int,
     full_epochs: int,
 ) -> float:
-    """Scale smoke-test timing into a transparent first-order full-run estimate."""
+    """Extrapolate a smoke runtime linearly in object count and training epochs.
+
+    This is deliberately a first-order planning estimate, not a benchmark model: I/O,
+    parallel scaling, and fixed setup costs need not scale linearly.
+    """
     if min(smoke_seconds, smoke_objects, smoke_epochs, full_objects, full_epochs) <= 0:
         raise ValueError("Timing inputs must be positive")
     return smoke_seconds * (full_objects / smoke_objects) * (full_epochs / smoke_epochs)

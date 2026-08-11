@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from astropy import units as u
 
-from warpTemplate.observer_population import (
+from warptemplate.observer_population import (
     _draw_poisson_count,
     _normalize_time_window,
     draw_observer_redshift,

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import tempfile
 
-from warpTemplate.population import (
+from warptemplate.population import (
     MissingRateError,
     OverlapRateError,
     discover_warp_fitclasses,
@@ -33,6 +34,19 @@ class WarpPopulationConfigTest(unittest.TestCase):
         fitclasses = discover_warp_fitclasses(self.coefficient_dir)
         validate_rate_config(self.config, available_fitclasses=fitclasses)
         validate_magabs_config(self.config, available_fitclasses=fitclasses)
+
+    def test_fitclass_discovery_accepts_v3_and_v4_names(self):
+        """Discovery must understand legacy and color-enriched coefficient names."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "warpcoeffs_v3_SN Ia.pkl").touch()
+            (root / "warpcoeffs_v4_SN II_col.pkl").touch()
+            (root / "unrelated.pkl").touch()
+            self.assertEqual(
+                discover_warp_fitclasses(root),
+                ["SN II", "SN Ia"],
+            )
 
     def test_missing_direct_rates_remain_visible(self):
         """Missing rates must fail unless explicitly allowed for auditing."""

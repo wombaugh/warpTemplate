@@ -12,10 +12,10 @@ import h5py
 import numpy as np
 import sncosmo
 
-from warpTemplate.loaders import WarpfitTemplateLoader
-from warpTemplate.models import get_model_from_warped_source
-from warpTemplate.source_cache import WarpSourceCache
-from warpTemplate.sources import DynamicColorWarpSource
+from warptemplate.loaders import WarpfitTemplateLoader
+from warptemplate.models import get_model_from_warped_source
+from warptemplate.source_cache import WarpSourceCache
+from warptemplate.sources import DynamicColorWarpSource
 
 
 class DynamicColorSourceTest(unittest.TestCase):
@@ -160,7 +160,7 @@ class WarpSourceCacheTest(unittest.TestCase):
             }
         }
         self.coefficient_path = (
-            self.coefficient_dir / "warpcoeffs_v3_SN Cache.pkl"
+            self.coefficient_dir / "warpcoeffs_v4_SN Cache_col.pkl"
         )
         with self.coefficient_path.open("wb") as handle:
             pickle.dump(coefficient, handle)

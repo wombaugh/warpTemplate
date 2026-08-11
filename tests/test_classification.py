@@ -11,7 +11,7 @@ from astropy.table import Table
 import numpy as np
 import pandas as pd
 
-from warpTemplate import classification as workflow
+from warptemplate import classification as workflow
 
 
 RAW_CLASSES = (
@@ -417,10 +417,8 @@ class NotebookStyleTests(unittest.TestCase):
             parsnip_source.index('parsnip = import_kernel_dependency('),
             parsnip_source.index("sys.path.insert(0, str(PROJECT_ROOT))"),
         )
-        self.assertLess(
-            supernnova_source.index('importlib.import_module("supernnova")'),
-            supernnova_source.index("sys.path.insert(0, str(PROJECT_ROOT))"),
-        )
+        self.assertIn("from warptemplate import supernnova_backend", supernnova_source)
+        self.assertNotIn('importlib.import_module("supernnova")', supernnova_source)
 
 
 if __name__ == "__main__":

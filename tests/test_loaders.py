@@ -9,33 +9,36 @@ from pathlib import Path
 
 _MISSING_MODULE = object()
 _ISOLATED_MODULES = (
-    "warpTemplate",
-    "warpTemplate.models",
-    "warpTemplate.loaders",
+    "warptemplate",
+    "warptemplate.models",
+    "warptemplate.loaders",
 )
 
 
 def load_loader_module():
     """Load the coefficient loader with a lightweight fake model module."""
 
-    package = types.ModuleType("warpTemplate")
-    package.__path__ = [str(Path(__file__).resolve().parents[1])]
+    package = types.ModuleType("warptemplate")
+    package_dir = Path(__file__).resolve().parents[1] / "warptemplate"
+    package.__path__ = [str(package_dir)]
 
-    models = types.ModuleType("warpTemplate.models")
+    models = types.ModuleType("warptemplate.models")
 
     def fake_get_warpedTimeSeriesModel(**kwargs):
+        """Return constructor arguments in place of a heavy sncosmo model."""
+
         return kwargs
 
     models.get_warpedTimeSeriesModel = fake_get_warpedTimeSeriesModel
 
-    sys.modules.pop("warpTemplate.loaders", None)
-    sys.modules["warpTemplate"] = package
-    sys.modules["warpTemplate.models"] = models
+    sys.modules.pop("warptemplate.loaders", None)
+    sys.modules["warptemplate"] = package
+    sys.modules["warptemplate.models"] = models
 
-    loaders_path = Path(__file__).resolve().parents[1] / "loaders.py"
-    spec = importlib.util.spec_from_file_location("warpTemplate.loaders", loaders_path)
+    loaders_path = package_dir / "loaders.py"
+    spec = importlib.util.spec_from_file_location("warptemplate.loaders", loaders_path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["warpTemplate.loaders"] = module
+    sys.modules["warptemplate.loaders"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -104,8 +107,18 @@ class WarpfitTemplateLoaderTest(unittest.TestCase):
                 ],
             },
         }
-        with open(self.coeff_dir / "warpcoeffs_v3_SN Test.pkl", "wb") as handle:
+        with open(self.coeff_dir / "warpcoeffs_v4_SN Test_col.pkl", "wb") as handle:
             pickle.dump(data, handle)
+
+    def test_versioned_path_and_discovery_follow_loader_configuration(self):
+        """Loader helpers must use the configured coefficient version and suffix."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        self.assertEqual(
+            loader.coefficient_path("SN/Test").name,
+            "warpcoeffs_v4_SNTest_col.pkl",
+        )
+        self.assertEqual(loader.available_fitclasses(), ["SN Test"])
 
     def test_target_color_metadata_and_correction(self):
         loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
@@ -158,6 +171,71 @@ class WarpfitTemplateLoaderTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             loader.get_templates("SN Test", color_mode="target")
+
+    def test_v4_library_supports_every_color_mode_reproducibly(self):
+        """All public color modes must work with the v4 `_col` file convention."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        options = {
+            None: {},
+            "harmonize": {},
+            "draw": {},
+            "target": {"target_peak_color": 0.9},
+        }
+        for mode, extra in options.items():
+            with self.subTest(color_mode=mode):
+                first = loader.get_templates(
+                    "SN Test",
+                    snbasis_selection=4,
+                    template_selection=1,
+                    random_seed=17,
+                    color_mode=mode,
+                    **extra,
+                )
+                second = loader.get_templates(
+                    "SN Test",
+                    snbasis_selection=4,
+                    template_selection=1,
+                    random_seed=17,
+                    color_mode=mode,
+                    **extra,
+                )
+                self.assertEqual(len(first), 4)
+                self.assertEqual(
+                    [entry["samplecorr_ebv"] for entry in first],
+                    [entry["samplecorr_ebv"] for entry in second],
+                )
+
+    def test_default_loader_falls_back_to_flat_v3_library(self):
+        """Existing v3 pickles remain readable during the v4 rollout."""
+
+        legacy_dir = self.coeff_dir / "legacy"
+        legacy_dir.mkdir()
+        with (legacy_dir / "warpcoeffs_v3_SN Legacy.pkl").open("wb") as handle:
+            pickle.dump(
+                {
+                    "basis": [
+                        {
+                            "model": "legacy-template",
+                            "z": 0.1,
+                            "quality": "gold",
+                            "draw_prob": 1.0,
+                            "mdict": {"corrmodel": {}},
+                        }
+                    ]
+                },
+                handle,
+            )
+        loader = self.module.WarpfitTemplateLoader(str(legacy_dir))
+        self.assertEqual(loader.available_fitclasses(), ["SN Legacy"])
+        self.assertEqual(
+            loader.get_templates(
+                "SN Legacy",
+                snbasis_selection="all",
+                template_selection="all",
+            )[0]["template_sn"],
+            "legacy-template",
+        )
 
     def test_descriptor_draw_does_not_materialize_models(self):
         """Descriptor selection must retain references without calling the model builder."""

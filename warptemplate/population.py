@@ -18,6 +18,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
@@ -215,17 +216,16 @@ def get_magabs_priors(rate_config: Mapping[str, Any]) -> Mapping[str, Mapping[st
 
 
 def discover_warp_fitclasses(warpcoeffs_dir: str | Path) -> list[str]:
-    """Discover fitclasses from ``warpcoeffs_v3_*.pkl`` files."""
+    """Discover unique fitclasses from versioned Warp coefficient pickles."""
 
     directory = Path(warpcoeffs_dir)
-    prefix = "warpcoeffs_v3_"
-    suffix = ".pkl"
-
-    fitclasses = []
-    for path in sorted(directory.glob(f"{prefix}*{suffix}")):
-        fitclasses.append(path.name[len(prefix) : -len(suffix)])
-
-    return fitclasses
+    pattern = re.compile(r"^warpcoeffs_v[^_]+_(?P<fitclass>.+?)(?:_col)?\.pkl$")
+    fitclasses = {
+        match.group("fitclass")
+        for path in directory.glob("warpcoeffs_v*_*.pkl")
+        if (match := pattern.match(path.name)) is not None
+    }
+    return sorted(fitclasses)
 
 
 def validate_magabs_config(

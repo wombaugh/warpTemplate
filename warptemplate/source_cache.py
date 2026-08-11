@@ -96,7 +96,7 @@ class WarpSourceCache:
             "fitclass": fitclass,
             "coefficient_digest": _file_digest(coefficient_path),
             "sncosmo_version": sncosmo.__version__,
-            "warpTemplate_version": _package_version("warpTemplate") or "0.1.0",
+            "warptemplate_version": _package_version("warptemplate") or "0.1.0",
             "complete": True,
         }
 
@@ -305,7 +305,7 @@ class WarpSourceCache:
                 "coefficient_digest": str(handle.attrs["coefficient_digest"]),
                 "source_fingerprint": str(handle.attrs["source_fingerprint"]),
                 "sncosmo_version": str(handle.attrs["sncosmo_version"]),
-                "warpTemplate_version": str(handle.attrs["warpTemplate_version"]),
+                "warptemplate_version": str(handle.attrs["warptemplate_version"]),
                 "entry_count": int(handle.attrs["entry_count"]),
             }
 

@@ -31,4 +31,3 @@ class TemplateCorrectionResult(TypedDict):
     absmag: float
     chidof: float
     lceval: Dict[str, int]
-    

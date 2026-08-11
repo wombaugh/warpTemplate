@@ -7,7 +7,7 @@ Start here:
 1. `create_usable_template_lightcurves.ipynb`
 2. `skysurvey_warp_sample.ipynb`
 
-The first notebook loads `warpcoeff_v3`, samples templates with
+The first notebook loads the color-enriched `warpcoeff_v4` files, samples templates with
 `WarpfitTemplateLoader`, compares colour modes, measures peak colour, and can
 turn one warped `sncosmo.Model` into a light-curve table.
 

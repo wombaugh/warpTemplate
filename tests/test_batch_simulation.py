@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from warpTemplate.batch_simulation import (
+from warptemplate.batch_simulation import (
     WarpSampleSpec,
     WarpSimulationRunner,
     _WarpBatchTargets,
@@ -22,6 +22,7 @@ from warpTemplate.batch_simulation import (
     allocate_group_balanced_counts,
 )
 from test_observer_population import FakeSurvey
+from coefficient_library import COEFFICIENT_DIR, requires_coefficients
 
 
 class PartiallyObservedSurvey(FakeSurvey):
@@ -175,6 +176,7 @@ class WarpSampleSpecTest(unittest.TestCase):
                 max_sources_per_batch=0,
             )
 
+    @requires_coefficients("SN IIP")
     def test_explicit_counts_do_not_require_a_redundant_total_size(self):
         """Explicit class counts must also define a valid fixed-size time window."""
 
@@ -187,7 +189,7 @@ class WarpSampleSpecTest(unittest.TestCase):
             batch_size=2,
         )
         batches = list(
-            _WarpTargetSampler("data/warpcoeff_v3").iter_batches(spec)
+            _WarpTargetSampler(COEFFICIENT_DIR).iter_batches(spec)
         )
         self.assertEqual(sum(len(batch) for batch in batches), 3)
 
@@ -308,7 +310,7 @@ class WarpSampleSpecTest(unittest.TestCase):
     def test_streamed_target_draw_is_independent_of_batch_size(self):
         """Operational chunking must not change any target-level random draw."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         if not coefficient_dir.exists():
             self.skipTest("repository coefficient library is unavailable")
         common = dict(
@@ -339,7 +341,7 @@ class WarpSampleSpecTest(unittest.TestCase):
     def test_streamed_batches_contain_no_model_objects(self):
         """Drawing a batch must retain only serializable target information."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         if not coefficient_dir.exists():
             self.skipTest("repository coefficient library is unavailable")
         spec = WarpSampleSpec(
@@ -363,7 +365,7 @@ class WarpSampleSpecTest(unittest.TestCase):
     def test_truth_columns_separate_raw_and_effective_entry_probabilities(self):
         """Schema-6 truth must expose the actual draw probability and distance."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         if not coefficient_dir.exists():
             self.skipTest("repository coefficient library is unavailable")
         spec = WarpSampleSpec(
@@ -409,7 +411,7 @@ class WarpSampleSpecTest(unittest.TestCase):
     def test_grouped_sampler_supports_every_color_mode(self):
         """Every color mode must produce its intended lightweight event parameter."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         if not coefficient_dir.exists():
             self.skipTest("repository coefficient library is unavailable")
         for color_mode in (None, "harmonize", "draw", "target"):
@@ -437,7 +439,7 @@ class WarpSampleSpecTest(unittest.TestCase):
     def test_runner_uses_skysurvey_and_resumes_completed_parquet_batches(self):
         """A real Warp model must pass through unmodified SkySurvey and resume safely."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         if not coefficient_dir.exists():
             self.skipTest("repository coefficient library is unavailable")
         spec = WarpSampleSpec(
@@ -526,6 +528,7 @@ class WarpSampleSpecTest(unittest.TestCase):
                     progress_every_batches=0,
                 )
 
+    @requires_coefficients("SN IIP")
     def test_runner_can_resolve_the_survey_from_the_spec(self):
         """The new runner form must ask SurveyFactory when no override is supplied."""
 
@@ -545,11 +548,11 @@ class WarpSampleSpecTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             runner = WarpSimulationRunner(
-                "data/warpcoeff_v3",
+                COEFFICIENT_DIR,
                 source_cache_dir=Path(directory) / "source-cache",
             )
             with patch(
-                "warpTemplate.survey_factory.SurveyFactory.from_spec",
+                "warptemplate.survey_factory.SurveyFactory.from_spec",
                 return_value=FakeSurvey(),
             ) as factory:
                 manifest = runner.run(spec, directory)
@@ -557,6 +560,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         self.assertEqual(manifest["status"], "complete")
         self.assertEqual(manifest["survey"]["name"], "ztf")
 
+    @requires_coefficients("SN IIP")
     def test_explicit_survey_override_skips_automatic_loading(self):
         """An explicit survey must remain supported in the new keyword API."""
 
@@ -576,11 +580,11 @@ class WarpSampleSpecTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             runner = WarpSimulationRunner(
-                "data/warpcoeff_v3",
+                COEFFICIENT_DIR,
                 source_cache_dir=Path(directory) / "source-cache",
             )
             with patch(
-                "warpTemplate.survey_factory.SurveyFactory.from_spec",
+                "warptemplate.survey_factory.SurveyFactory.from_spec",
                 side_effect=AssertionError("automatic loader should not run"),
             ):
                 manifest = runner.run(
@@ -660,14 +664,14 @@ class WarpSampleSpecTest(unittest.TestCase):
                 return_value={"fingerprint": "stable-cache"}
             )
             with patch(
-                "warpTemplate.survey_factory.SurveyFactory.from_spec",
+                "warptemplate.survey_factory.SurveyFactory.from_spec",
                 return_value=ProvenanceSurvey("first-log"),
             ):
                 first = runner.run(spec, directory)
             self.assertEqual(first["status"], "complete")
 
             with patch(
-                "warpTemplate.survey_factory.SurveyFactory.from_spec",
+                "warptemplate.survey_factory.SurveyFactory.from_spec",
                 return_value=ProvenanceSurvey("changed-log"),
             ) as factory:
                 with self.assertRaisesRegex(
@@ -743,6 +747,7 @@ class WarpSampleSpecTest(unittest.TestCase):
                     resume=True,
                 )
 
+    @requires_coefficients("SN IIP", "SN Ib")
     def test_fitclass_end_is_a_hard_batch_boundary(self):
         """Targets from distinct fitclasses must never share one batch."""
 
@@ -757,7 +762,7 @@ class WarpSampleSpecTest(unittest.TestCase):
             seed=53,
         )
         batches = list(
-            _WarpTargetSampler("data/warpcoeff_v3").iter_batches(spec)
+            _WarpTargetSampler(COEFFICIENT_DIR).iter_batches(spec)
         )
         self.assertEqual([len(batch) for batch in batches], [3, 2])
         self.assertEqual(
@@ -768,6 +773,7 @@ class WarpSampleSpecTest(unittest.TestCase):
             all(batch["fitclass"].nunique() == 1 for batch in batches)
         )
 
+    @requires_coefficients("SN IIP")
     def test_batches_group_entries_and_respect_source_limit(self):
         """Batches must stop at both their row and selected-source limits."""
 
@@ -781,7 +787,7 @@ class WarpSampleSpecTest(unittest.TestCase):
             max_sources_per_batch=3,
             seed=61,
         )
-        sampler = _WarpTargetSampler("data/warpcoeff_v3")
+        sampler = _WarpTargetSampler(COEFFICIENT_DIR)
         batches = list(sampler.iter_batches(source_limited_spec))
         self.assertEqual(sum(map(len, batches)), 200)
         self.assertTrue(all(len(batch) <= 37 for batch in batches))
@@ -823,10 +829,11 @@ class WarpSampleSpecTest(unittest.TestCase):
         row_limited = list(sampler.iter_batches(row_limited_spec))
         self.assertEqual([len(batch) for batch in row_limited], [4] * 5)
 
+    @requires_coefficients("SN IIP")
     def test_one_large_entry_spans_multiple_row_limited_batches(self):
         """A selected entry larger than the row limit must continue next batch."""
 
-        sampler = _WarpTargetSampler("data/warpcoeff_v3")
+        sampler = _WarpTargetSampler(COEFFICIENT_DIR)
         only_entry = sampler.loader.get_entry_probabilities(
             "SN IIP",
             min_fit_quality="bronze",
@@ -857,10 +864,11 @@ class WarpSampleSpecTest(unittest.TestCase):
             1,
         )
 
+    @requires_coefficients("SN IIP")
     def test_sources_are_shared_only_inside_one_batch(self):
         """A source is reused within a batch and rebuilt in a new batch."""
 
-        coefficient_dir = Path("data/warpcoeff_v3")
+        coefficient_dir = COEFFICIENT_DIR
         spec = WarpSampleSpec(
             run_name="batch_local_sources",
             active_fitclasses=["SN IIP"],
@@ -898,10 +906,11 @@ class WarpSampleSpecTest(unittest.TestCase):
         self.assertEqual(second.loaded_source_count, 1)
         self.assertEqual(source_cache.load_source.call_count, 2)
 
+    @requires_coefficients("SN IIP")
     def test_batch_targets_load_sources_only_when_skysurvey_requests_models(self):
         """Creating compact targets alone must not prepare any dense source."""
 
-        sampler = _WarpTargetSampler("data/warpcoeff_v3")
+        sampler = _WarpTargetSampler(COEFFICIENT_DIR)
         spec = WarpSampleSpec(
             run_name="lazy_sources",
             active_fitclasses=["SN IIP"],
@@ -918,6 +927,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         )
         self.assertEqual(targets.loaded_source_count, 0)
 
+    @requires_coefficients("SN IIP")
     def test_unobserved_targets_do_not_load_sources_in_skysurvey(self):
         """SkySurvey field selection must happen before lazy source creation."""
 
@@ -937,7 +947,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             manifest = WarpSimulationRunner(
-                "data/warpcoeff_v3",
+                COEFFICIENT_DIR,
                 source_cache_dir=Path(directory) / "source-cache",
             ).run(
                 spec, PartiallyObservedSurvey(), directory
@@ -949,6 +959,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         self.assertEqual(manifest["truth_rows"], 4)
         self.assertLess(batch["loaded_source_count"], batch["template_count"])
 
+    @requires_coefficients("SN IIP")
     def test_fully_unobserved_batch_persists_truth_and_empty_observations(self):
         """A zero-field-match batch must not enter SkySurvey's empty concat path."""
 
@@ -970,7 +981,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / spec.run_name
             manifest = WarpSimulationRunner(
-                "data/warpcoeff_v3",
+                COEFFICIENT_DIR,
                 source_cache_dir=Path(directory) / "source-cache",
             ).run(
                 spec,
@@ -988,6 +999,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         self.assertEqual(batch["loaded_source_count"], 0)
         self.assertEqual(manifest["observation_rows"], 0)
 
+    @requires_coefficients("SN IIP")
     def test_phase_empty_batch_loads_source_but_writes_no_observations(self):
         """Field matching precedes lazy loading, while phase filtering follows it."""
 
@@ -1008,7 +1020,7 @@ class WarpSampleSpecTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             manifest = WarpSimulationRunner(
-                "data/warpcoeff_v3",
+                COEFFICIENT_DIR,
                 source_cache_dir=Path(directory) / "source-cache",
             ).run(
                 spec,

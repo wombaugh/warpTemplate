@@ -10,12 +10,13 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from warpTemplate.batch_simulation import WarpSampleSpec, WarpSimulationRunner
-from warpTemplate.observer_population import (
+from coefficient_library import COEFFICIENT_DIR, requires_coefficients
+from warptemplate.batch_simulation import WarpSampleSpec, WarpSimulationRunner
+from warptemplate.observer_population import (
     _draw_poisson_count,
     observer_expected_count,
 )
-from warpTemplate.survey_factory import (
+from warptemplate.survey_factory import (
     CombinedSurvey,
     ObservedSkyArea,
     SurveyConfig,
@@ -916,13 +917,11 @@ class SurveyFactoryTest(unittest.TestCase):
                 tstop=60_100.0,
             )
 
+    @requires_coefficients("SN IIP")
     def test_runner_end_to_end_for_every_automatic_survey_mode(self):
         """The runner must automatically load and simulate all three survey modes."""
 
-        repository_root = Path(__file__).resolve().parents[2]
-        coefficients = repository_root / "data" / "warpcoeff_v3"
-        if not coefficients.exists():
-            self.skipTest("repository coefficient library is unavailable")
+        coefficients = COEFFICIENT_DIR
 
         common_options = {
             "ztf_path": (

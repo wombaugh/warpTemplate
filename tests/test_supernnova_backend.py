@@ -11,9 +11,9 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from warpTemplate import classification as workflow
-from warpTemplate import supernnova_backend as backend
-from warpTemplate.tests.test_classification import make_synthetic_sample
+from warptemplate import classification as workflow
+from warptemplate import supernnova_backend as backend
+from test_classification import make_synthetic_sample
 
 
 def make_role_manifest(truth: pd.DataFrame) -> pd.DataFrame:
@@ -59,18 +59,23 @@ class SequenceAdapterTests(unittest.TestCase):
         self.retained = self.truth[self.truth["object_id"] != "excluded-object"]
 
     def test_fixed_feature_order_and_sequence_invariants(self) -> None:
-        """Sequences should retain nine bands, flags, time order, and exact redshift."""
+        """Sequences should retain bands and time while excluding object context."""
         object_id = self.retained.iloc[0]["object_id"]
         sequences = backend.build_supernnova_sequences(
             self.truth, self.observations, [object_id]
         )
         sequence, times = sequences[object_id]
-        self.assertEqual(sequence.shape[1], 30)
+        self.assertEqual(sequence.shape[1], len(backend.ALL_FEATURES))
         self.assertEqual(
-            backend.feature_names("photometry_only"), backend.PHOTOMETRY_FEATURES
+            backend.feature_names("photometry_only"), backend.BASE_PHOTOMETRY_FEATURES
         )
         self.assertEqual(
-            backend.feature_names("photometry_plus_truth_z"), backend.ALL_FEATURES
+            backend.feature_names("photometry_plus_truth_z"),
+            (*backend.BASE_PHOTOMETRY_FEATURES, *backend.REDSHIFT_FEATURES),
+        )
+        self.assertEqual(
+            backend.feature_names("photometry_only", engineered_features=True),
+            backend.PHOTOMETRY_FEATURES,
         )
         self.assertFalse(
             any("HOSTGAL" in name for name in backend.feature_names("photometry_only"))
@@ -82,21 +87,41 @@ class SequenceAdapterTests(unittest.TestCase):
         presence = sequence[
             :,
             len(backend.FLUX_FEATURES)
-            + len(backend.FLUXERR_FEATURES) : len(backend.PHOTOMETRY_FEATURES)
-            - 1,
+            + len(backend.FLUXERR_FEATURES) : len(backend.FLUX_FEATURES)
+            + len(backend.FLUXERR_FEATURES)
+            + len(backend.PRESENCE_FEATURES),
         ]
         self.assertTrue(set(np.unique(presence)).issubset({0.0, 1.0}))
-        self.assertTrue(
-            np.all(
-                sequence[:, backend.ALL_FEATURES.index("HOSTGAL_SPECZ")]
-                == self.retained.iloc[0]["z"]
-            )
+        self.assertNotIn("HOSTGAL_SPECZ", backend.ALL_FEATURES)
+        band_fraction = sequence[:, backend.ALL_FEATURES.index("observed_band_fraction")]
+        np.testing.assert_allclose(band_fraction, presence.mean(axis=1))
+        self.assertTrue(np.isfinite(sequence).all())
+
+    def test_inverse_variance_duplicate_aggregation(self) -> None:
+        """Repeated same-band observations should combine with inverse variance."""
+        observations = pd.DataFrame(
+            {
+                "object_id": ["object", "object"],
+                "mjd": [1.0, 1.1],
+                "band": ["lsstr", "lsstr"],
+                "flux": [10.0, 20.0],
+                "fluxerr": [2.0, 1.0],
+            }
         )
-        self.assertTrue(
-            np.all(
-                sequence[:, backend.ALL_FEATURES.index("HOSTGAL_SPECZ_ERR")] == 0.0
-            )
+        grouped = workflow.group_observing_epochs(
+            observations, duplicate_strategy="inverse_variance"
         )
+        self.assertEqual(len(grouped), 1)
+        self.assertAlmostEqual(grouped.loc[0, "flux"], 18.0)
+        self.assertAlmostEqual(grouped.loc[0, "fluxerr"], np.sqrt(0.8))
+
+    def test_requested_object_order_is_preserved(self) -> None:
+        """Explicit object selections should define deterministic sequence order."""
+        object_ids = list(self.retained["object_id"].astype(str).iloc[:3])[::-1]
+        sequences = backend.build_supernnova_sequences(
+            self.truth, self.observations, object_ids
+        )
+        self.assertEqual(list(sequences), object_ids)
 
     def test_zeropoint_275_preserves_magnitude_and_snr(self) -> None:
         """The backend zeropoint convention should preserve magnitude and S/N."""
@@ -165,7 +190,10 @@ class DatabaseAndTrainingTests(unittest.TestCase):
 
     def test_normalization_uses_training_sequences_only(self) -> None:
         """Changing held-out fluxes must not change persisted normalization."""
-        with tempfile.TemporaryDirectory() as first_dir, tempfile.TemporaryDirectory() as second_dir:
+        with (
+            tempfile.TemporaryDirectory() as first_dir,
+            tempfile.TemporaryDirectory() as second_dir,
+        ):
             altered = self.observations.copy()
             train_id = self.role_manifest.loc[
                 self.role_manifest["role"] == "train", "object_id"
@@ -185,18 +213,89 @@ class DatabaseAndTrainingTests(unittest.TestCase):
             with h5py.File(first_path, "r") as first, h5py.File(
                 second_path, "r"
             ) as second:
-                self.assertEqual(
-                    first.attrs["summary_json"], second.attrs["summary_json"]
-                )
                 summary = json.loads(first.attrs["summary_json"])
+                second_summary = json.loads(second.attrs["summary_json"])
+                self.assertEqual(summary["normalization"], second_summary["normalization"])
+                self.assertNotEqual(
+                    summary["database_identity"], second_summary["database_identity"]
+                )
                 self.assertEqual(
                     summary["normalization"]["FLUXCAL"]["min"],
                     backend.FLUX_NORMALIZATION_FLOOR,
                 )
 
+    def test_missing_bands_remain_neutral_after_normalization(self) -> None:
+        """Structural missing-band zeros must not masquerade as measurements."""
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = self._prepare_database(Path(directory))
+            config = backend.SuperNNovaTrainingConfig(epochs=1, threads=1)
+            store = backend.HDF5SequenceStore(database_path, config)
+            records, _ = store.fetch([store.indices("train")[0]])
+            sequence = records[0][0]
+            presence = sequence[:, 2 * len(backend.FLUX_FEATURES) : 3 * len(backend.FLUX_FEATURES)]
+            flux = sequence[:, : len(backend.FLUX_FEATURES)]
+            flux_error = sequence[:, len(backend.FLUX_FEATURES) : 2 * len(backend.FLUX_FEATURES)]
+            self.assertTrue(np.all(flux[presence == 0] == 0.0))
+            self.assertTrue(np.all(flux_error[presence == 0] == 0.0))
+            store.close()
+
+            truth_config = backend.SuperNNovaTrainingConfig(
+                redshift_mode="photometry_plus_truth_z", epochs=1, threads=1
+            )
+            truth_store = backend.HDF5SequenceStore(database_path, truth_config)
+            truth_index = truth_store.indices("train")[0]
+            truth_records, _ = truth_store.fetch([truth_index])
+            np.testing.assert_allclose(
+                truth_records[0][0][:, -1],
+                truth_store.redshift[truth_index],
+                rtol=1e-6,
+            )
+            truth_store.close()
+
+    def test_changed_source_content_invalidates_database_cache(self) -> None:
+        """A modified observation artifact must not reuse a stale HDF5 cache."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = write_synthetic_ensemble(root, self.truth, self.observations)
+            database_path = root / "database.h5"
+            truth = self.truth.assign(survey_realization_id="r000")
+            backend.prepare_supernnova_database(
+                sample_dir, truth, self.role_manifest, database_path
+            )
+            observation_path = next(sample_dir.glob("*/observations/**/*.parquet"))
+            changed = pd.read_parquet(observation_path)
+            changed.loc[0, "flux"] += 1.0
+            changed.to_parquet(observation_path, index=False)
+            with self.assertRaises(FileExistsError):
+                backend.prepare_supernnova_database(
+                    sample_dir, truth, self.role_manifest, database_path
+                )
+
+    def test_minimum_epoch_rule_applies_to_held_out_roles(self) -> None:
+        """Validation and test objects should obey the same eligibility rule as train."""
+        validation_id = self.role_manifest.loc[
+            self.role_manifest["role"] == "validation", "object_id"
+        ].iloc[0]
+        selected = self.observations[self.observations["object_id"] == validation_id]
+        retained_times = np.sort(selected["mjd"].unique())[:2]
+        shortened = self.observations[
+            (self.observations["object_id"] != validation_id)
+            | self.observations["mjd"].isin(retained_times)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = self._prepare_database(root, observations=shortened)
+            with h5py.File(database_path, "r") as handle:
+                self.assertNotIn(validation_id, set(handle["SNID"][:].astype(str)))
+                summary = json.loads(handle.attrs["summary_json"])
+                self.assertEqual(summary["skipped_short_objects"], 1)
+
     def test_database_round_trips_through_installed_supernnova_loader(self) -> None:
         """The generated HDF5 schema should load through kernel utilities."""
-        from supernnova.utils import training_utils
+        try:
+            from supernnova.utils import training_utils
+        except ModuleNotFoundError as error:
+            self.skipTest(f"optional SuperNNova dependency is unavailable: {error.name}")
 
         with tempfile.TemporaryDirectory() as directory:
             database_path = self._prepare_database(Path(directory))
@@ -210,7 +309,9 @@ class DatabaseAndTrainingTests(unittest.TestCase):
                 len(validation),
                 int((self.role_manifest["role"] == "validation").sum()),
             )
-            self.assertEqual(train[0][0].shape[1], len(backend.PHOTOMETRY_FEATURES))
+            self.assertEqual(
+                train[0][0].shape[1], len(backend.BASE_PHOTOMETRY_FEATURES)
+            )
             self.assertTrue(np.isfinite(train[0][0]).all())
 
     def test_both_tiny_models_train_reload_and_predict(self) -> None:
@@ -271,6 +372,90 @@ class DatabaseAndTrainingTests(unittest.TestCase):
                     partial.ineligible_objects,
                     int((self.role_manifest["role"] == "test").sum()),
                 )
+                first_epoch = backend.predict_supernnova(
+                    output_dir / "best.pt",
+                    database_path,
+                    role="test",
+                    cutoff_days=0.0,
+                    cutoff_reference="first_observation",
+                    device="cpu",
+                )
+                self.assertEqual(
+                    first_epoch.eligible_objects,
+                    int((self.role_manifest["role"] == "test").sum()),
+                )
+                self.assertFalse((output_dir / "best.pt.tmp").exists())
+
+    def test_interrupted_training_matches_uninterrupted_training(self) -> None:
+        """Restored RNG and scheduler states should make CPU resume exact."""
+        import torch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = self._prepare_database(root)
+            config = backend.SuperNNovaTrainingConfig(
+                epochs=3,
+                hidden_dim=8,
+                num_layers=1,
+                dropout=0.1,
+                batch_size=8,
+                device="cpu",
+                threads=1,
+                calibrate_probabilities=False,
+            )
+            uninterrupted = root / "uninterrupted"
+            resumed = root / "resumed"
+            direct_history = backend.train_supernnova(
+                database_path, uninterrupted, config, show_progress=False
+            )
+            backend.train_supernnova(
+                database_path,
+                resumed,
+                config,
+                show_progress=False,
+                max_epochs_this_call=1,
+            )
+            self.assertFalse((resumed / "complete.json").exists())
+            resumed_history = backend.train_supernnova(
+                database_path, resumed, config, show_progress=False
+            )
+            self.assertEqual(direct_history["epochs"], resumed_history["epochs"])
+            direct_payload = torch.load(
+                uninterrupted / "best.pt", map_location="cpu", weights_only=False
+            )
+            resumed_payload = torch.load(
+                resumed / "best.pt", map_location="cpu", weights_only=False
+            )
+            for name, tensor in direct_payload["model_state"].items():
+                self.assertTrue(torch.equal(tensor, resumed_payload["model_state"][name]))
+
+    def test_attention_engineered_causal_variant_trains(self) -> None:
+        """Opt-in engineered features, attention, and causal recurrence should compose."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = self._prepare_database(root)
+            config = backend.SuperNNovaTrainingConfig(
+                redshift_mode="photometry_plus_truth_z",
+                epochs=1,
+                hidden_dim=8,
+                num_layers=1,
+                dropout=0.0,
+                batch_size=8,
+                bidirectional=False,
+                rnn_output_option="attention",
+                engineered_features=True,
+                device="cpu",
+                threads=1,
+            )
+            output_dir = root / "attention"
+            backend.train_supernnova(
+                database_path, output_dir, config, show_progress=False
+            )
+            model, _ = backend.load_supernnova_checkpoint(
+                output_dir / "best.pt", device="cpu"
+            )
+            self.assertEqual(model.rnn_layer.input_size, len(backend.PHOTOMETRY_FEATURES))
+            self.assertEqual(model.output_layer.in_features, config.hidden_dim + 1)
 
 
 class PairedComparisonTests(unittest.TestCase):
@@ -309,6 +494,15 @@ class PairedComparisonTests(unittest.TestCase):
         self.assertGreater(
             comparison["intervals"]["balanced_accuracy"]["median"], 0.0
         )
+
+    def test_temperature_scaling_softens_overconfident_errors(self) -> None:
+        """Validation calibration should raise temperature for confident mistakes."""
+        class_count = len(workflow.FINAL_CLASSES)
+        labels = np.arange(class_count)
+        probabilities = np.full((class_count, class_count), 0.01 / (class_count - 1))
+        probabilities[np.arange(class_count), (labels + 1) % class_count] = 0.99
+        temperature = backend.fit_temperature_scaling(labels, probabilities)
+        self.assertGreater(temperature, 1.0)
 
 
 if __name__ == "__main__":

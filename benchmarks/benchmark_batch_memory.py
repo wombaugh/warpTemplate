@@ -66,7 +66,7 @@ def benchmark(
 ) -> dict[str, float | int | str | None]:
     """Run unchanged SkySurvey and return one machine-readable memory record."""
 
-    from warpTemplate import WarpSampleSpec, WarpSimulationRunner
+    from warptemplate import WarpSampleSpec, WarpSimulationRunner
 
     spec = WarpSampleSpec(
         run_name="batch_memory_benchmark",
@@ -123,7 +123,7 @@ def main() -> None:
     )
     parser.add_argument("--max-rss-mb", type=float, default=4096.0)
     parser.add_argument(
-        "--coefficients", type=Path, default=Path("data/warpcoeff_v3")
+        "--coefficients", type=Path, default=Path("data/warpcoeff_v4")
     )
     arguments = parser.parse_args()
     if min(
@@ -145,7 +145,7 @@ def main() -> None:
         parser.error("--observed-targets-per-batch cannot exceed --batch-size")
 
     # Running from the repository root should import the local package.
-    repository = Path(__file__).resolve().parents[2]
+    repository = Path(__file__).resolve().parents[1]
     if str(repository) not in sys.path:
         sys.path.insert(0, str(repository))
     result = benchmark(

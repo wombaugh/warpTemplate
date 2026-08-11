@@ -1053,7 +1053,7 @@ class WarpSimulationRunner:
                 "spec": spec.to_dict(),
                 "software": {
                     "python": platform.python_version(),
-                    "warpTemplate": _package_version("warpTemplate"),
+                    "warptemplate": _package_version("warptemplate"),
                     "sncosmo": _package_version("sncosmo"),
                     "skysurvey": _package_version("skysurvey"),
                     "color_engine": "dynamic-ccm89-v1",

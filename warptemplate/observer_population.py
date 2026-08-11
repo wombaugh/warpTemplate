@@ -157,7 +157,7 @@ def observer_expected_count(
     redshift_grid = np.linspace(float(zmin), float(zmax), int(grid_size))
     density = _observer_rate_density(redshift_grid, rate, cosmology)
     # np.trapz supports the package's declared NumPy >=1.23 compatibility range.
-    rate_per_observer_year = float(np.trapz(density, redshift_grid))
+    rate_per_observer_year = float(np.trapezoid(density, redshift_grid))
     return rate_per_observer_year * float(nyears) * float(sky_fraction)
 
 

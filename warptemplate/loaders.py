@@ -1,5 +1,4 @@
 # warp_templates/loaders.py
-import os
 import pickle
 import logging
 import re
@@ -73,40 +72,73 @@ class WarpfitTemplateLoader:
     The expected structure of each `.pkl` file is:
 
         snbasisname[List[Dict]] where each inner Dict corresponds to fit information for a template:
-            {
-                "id": str,              # SN identifier 
-                "model": str,           # template name
-                "z": float,              # redshift
-                "quality": str,          # quality flag: 
-                                            "gold": both raw and warp model lc goodfit & original template type compatible
-                                            "silver": warped fit good + compatible with original template type, raw lc poor
-                                            "bronze": above not fulfilled, but fit acceptable
-                "draw_prob": float,# sampling weight
-                "type": str,          # original type
-                "model_colors": dict    # Fit parameters of the original template fit (e.g. for color harmonization)
+        {
+            "warpcoeff": {
+                "ZTF18xxxxx": [           # Base SN-ID
                     {
-                        'K': 0.9079106174117336,
-                        'loc': 0.1250977286061127,
-                        'scale': 0.1514897618587996,
-                        'color1': 'ztfg',
-                        'color2': 'ztfr',
-                        'ebv_corr_func': [-0.0001, 0.01, 0.5]  # polynomial coefficients to map from drawn color to E(B-V) correction
+                        # Identifikation
+                        "id": "ZTF18xxxxx",
+                        "model": "v19-2006bp",    # Base Template
+                        "z": 0.045,
+
+                        # Qualität & Auswahl
+                        "quality": "gold",        # gold | silver | bronze
+                        "draw_prob": 0.312,       # relative sampling weight for this template (relative to other templates for the same SN basis)
+
+                        # Interpolated peak color information of original data
+                        "peak_gp_ztfg-ztfr": 0.127,         # native Peak-Farbe g-r
+                        "type": "SN IIP",         #
+
+
+                        # Warp data for template conustrction
+                        "mdict": {
+                            "warpfit_tmin": -15.0,
+                            "warpfit_tmax": 80.0,
+                            # ... weitere Keys für get_warpedTimeSeriesModel()
+                        },
+
+                        # Fit-Ergebnis des gewarpten Modells
+                        "wresult": {
+                            "parameters": [...],
+                            "chisq": 45.3,
+                            "ndof": 38,
+                            # ...
+                        },
+
+                        # Survival function of warped model
+                        "sf": 0.89,
                     },
-                "mdict": dict      # warpdata (see below)
+                    # ... further Templates for the same SN
+                ],
+                # ... further SNe
             },
 
+            "model_colors": {                 # Peak color distribution of class (optional)
+                "K": 0.908,
+                "loc": 0.125,
+                "scale": 0.151,
+                "color1": "ztfg",
+                "color2": "ztfr",
+                "ebv_corr_func": [-0.0001, 0.01, 0.5]
+            }
+        }
     Each `mdict` must match the expected input of
     `get_warpedTimeSeriesModel`.
     """
 
+
     def __init__(
         self,
         warpcoeffs_dir: str,
+        version: str = "4",
+        suffix: str = "_col",
         logger: Optional[logging.Logger] = None
     ):
         """Initialize the coefficient directory, logger, and fitclass cache."""
 
         self.warpcoeffs_dir = warpcoeffs_dir
+        self.version = str(version)
+        self.suffix = str(suffix)
         self._cache: Dict[str, Mapping[str, Any]] = {}
 
         if logger is None:
@@ -131,6 +163,11 @@ class WarpfitTemplateLoader:
             Identifier used to construct filename:
                 warpcoeffs_<fitclass>_col.pkl
                 _col suffix indicates that the file contains color correction data (ebv_meancol_corr)
+        version: str
+            Version string used in filename:
+                warpcoeffs_v<version>_<fitclass>_col.pkl
+        suffix: str
+            Optional suffix for filename (default: "_col")
 
         Returns
         -------
@@ -148,37 +185,67 @@ class WarpfitTemplateLoader:
             self.logger.debug(f"Cache hit for fitclass={key}")
             return self._cache[key]
 
-        filepath = os.path.join(
-            self.warpcoeffs_dir,
-#            f"warpcoeffs_{key}_distinfo.pkl"
-            f"warpcoeffs_v3_{key}.pkl"
-        )
-
+        filepath = self.coefficient_path(fitclass)
         self.logger.info(f"Loading warpcoeffs from {filepath}")
 
-        if not os.path.exists(filepath):
+        if not filepath.exists():
             self.logger.error(f"File not found: {filepath}")
             raise FileNotFoundError(filepath)
 
-        with open(filepath, "rb") as f:
-            data = pickle.load(f)
+        with filepath.open("rb") as f:
+            raw_data = pickle.load(f)
+
+        # For now keeping handle to old pickle format.
+        if "warpcoeff" in raw_data:
+            # Neue Struktur: bereits korrekt
+            data = raw_data
+        elif isinstance(raw_data, dict) and all(
+            isinstance(v, list) for v in raw_data.values()
+        ):
+            # Alte Struktur: {sn_id: [warpfits, ...], ...}
+            data = {
+                "warpcoeff": raw_data,
+                "model_colors": None,
+            }
+        else:
+            raise ValueError(
+                f"Unrecognized warp coefficient file structure in {filepath}. "
+                "Expected dict with 'warpcoeff' key or flat {sn_id: [entries]} mapping."
+            )
 
         self._cache[key] = data
         return data
 
     def coefficient_path(self, fitclass: str) -> Path:
-        """Return the coefficient-file path associated with one fitclass."""
+        """Return the configured path, falling back to an existing v3 pickle."""
 
         key = re.sub(r"/", "", fitclass)
-        return Path(self.warpcoeffs_dir) / f"warpcoeffs_v3_{key}.pkl"
+        configured = (
+            Path(self.warpcoeffs_dir)
+            / f"warpcoeffs_v{self.version}_{key}{self.suffix}.pkl"
+        )
+        legacy = Path(self.warpcoeffs_dir) / f"warpcoeffs_v3_{key}.pkl"
+        if not configured.exists() and legacy.exists():
+            return legacy
+        return configured
 
     def available_fitclasses(self) -> List[str]:
         """Discover fitclasses represented by coefficient files on disk."""
 
-        prefix = "warpcoeffs_v3_"
+        prefix = f"warpcoeffs_v{self.version}_"
+        suffix = f"{self.suffix}.pkl"
+        configured = sorted(
+            path.name[len(prefix) : -len(suffix)]
+            for path in Path(self.warpcoeffs_dir).glob(f"{prefix}*{suffix}")
+        )
+        if configured:
+            return configured
+
+        # Existing v3 libraries remain usable while v4 data is rolled out.
+        legacy_prefix = "warpcoeffs_v3_"
         return sorted(
-            path.stem[len(prefix) :]
-            for path in Path(self.warpcoeffs_dir).glob(f"{prefix}*.pkl")
+            path.name[len(legacy_prefix) : -len(".pkl")]
+            for path in Path(self.warpcoeffs_dir).glob(f"{legacy_prefix}*.pkl")
         )
 
     def get_coefficient_entry(
@@ -472,7 +539,7 @@ class WarpfitTemplateLoader:
         drawn_colors = iter_drawn_colors() if color_mode == "draw" else None
 
         # -------------------------
-        # Limit to quality requirement 
+        # Limit to quality requirement
         # -------------------------
         if min_fit_quality is not None:
             min_fit_quality = min_fit_quality.lower()
@@ -595,6 +662,8 @@ class WarpfitTemplateLoader:
                     "template_prob": warpfit["draw_prob"],
                     "quality": warpfit.get("quality"),
                     "peakcol": warpfit.get("peakcol"),
+                    "peak_gp_ztfg-ztfr": warpfit.get("peak_gp_ztfg-ztfr"),
+                    "peak_gp_ztfr-ztfi": warpfit.get("peak_gp_ztfr-ztfi"),
                     "target_peak_color": applied_target_peak_color,
                     "samplecorr_ebv": samplecorr_ebv,
                     "model_colors": dict(model_colors) if model_colors else None,

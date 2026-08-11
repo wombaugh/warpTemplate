@@ -26,7 +26,7 @@ def benchmark(
 ) -> dict[str, float | int | str]:
     """Compare shared-source models with rebuilding a source for every event."""
 
-    from warpTemplate.loaders import WarpfitTemplateLoader
+    from warptemplate.loaders import WarpfitTemplateLoader
 
     loader = WarpfitTemplateLoader(str(coefficient_dir))
     descriptor = loader.get_entry_probabilities(fitclass)[0][0]
@@ -93,7 +93,7 @@ def main() -> None:
     )
     parser.add_argument("--fitclass", default="SN IIP")
     parser.add_argument(
-        "--coefficients", type=Path, default=Path("data/warpcoeff_v3")
+        "--coefficients", type=Path, default=Path("data/warpcoeff_v4")
     )
     arguments = parser.parse_args()
     if arguments.events <= 0:
@@ -102,7 +102,7 @@ def main() -> None:
         parser.error("--fresh-events must be positive")
 
     # Running from the repository root should always import the local package.
-    repository = Path(__file__).resolve().parents[2]
+    repository = Path(__file__).resolve().parents[1]
     if str(repository) not in sys.path:
         sys.path.insert(0, str(repository))
     print(

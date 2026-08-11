@@ -152,8 +152,8 @@ SN_REJECT = {
  'RECURRENT': [
      'ZTF18aacmwsq', 'ZTF18aatfxtd', 'ZTF18adjtukb', 'ZTF18aavoyoq', 'ZTF20acycgkl'
      ],
-'HACKALI': ['ZTF18acwyvet', 'ZTF18adbikdz', 'ZTF19aadnxbh', 'ZTF19acxxwrs', 'ZTF20aalrqbu', 
-    'ZTF20aamttiw', 'ZTF20aazycgy', 'ZTF20abcjdwu', 'ZTF20abefbpl', 'ZTF20accmutv', 
+'HACKALI': ['ZTF18acwyvet', 'ZTF18adbikdz', 'ZTF19aadnxbh', 'ZTF19acxxwrs', 'ZTF20aalrqbu',
+    'ZTF20aamttiw', 'ZTF20aazycgy', 'ZTF20abcjdwu', 'ZTF20abefbpl', 'ZTF20accmutv',
     'ZTF20aciwcuz', 'ZTF21aabpnlm', 'ZTF21acadrzr', 'ZTF22aaaefgq']
     }
 
@@ -191,6 +191,7 @@ KNOWN_CLASSES = [
     "SLSN-II",
     "SN Ia-91T",
     "SN Ibn",
+    "TDE",
 ]
 
 # ----------------------------------------------------------------------
@@ -225,6 +226,7 @@ WARP_MAP_EXTENDED = {
     "SN Ia": "SN Ia (e)",
     "SN II": "SN II (e)",
     "SN Ib/c": "SN Ib/c (e)",
+    "TDE": "TDE (e)",
 }
 
 WARP_MAP_WIDE = {
@@ -239,6 +241,7 @@ WARP_MAP_WIDE = {
     "SN Ic (e)": "SN Ib/c (w)",
     "SN Ia (e)": "SN Ia (w)",
     "SN Ib/c (e)": "SN Ib/c (w)",
+    "TDE (e)": "TDE (w)",
 }
 
 WARP_MAP_ALL = {
@@ -248,6 +251,7 @@ WARP_MAP_ALL = {
     "SN Ia-pec (w)": "SN Ia (a)",
     "SN II (w)": "SN CC (a)",
     "SN Ia-91bg (w)": "SN Ia (a)",
+    "TDE (w)": "TDE (a)",
 }
 
 def add_warpclasses(
@@ -316,15 +320,17 @@ def add_warpclasses(
 # ----------------------------------------------------------------------
 
 TEMPLATE_CLOSE_TYPES = {
+    'TDE' : ['TDE (w)', 'TDE (e)', 'TDE'],
+    'SLSN I' : ['SLSN (w)', 'SLSN (e)', 'SLSN-I'],
     'PopIII' : ['SLSN (w)', 'SLSN (e)', 'SLSN-II', 'SLSN-I'],
     'SN II' : [
-        'SN II', 
-        "SN II (e)", 
+        'SN II',
+        "SN II (e)",
         'SN II (w)', 'SN CC (a)'
     ],
     'SN II-pec': ['SN II (w)', 'SN CC (a)', "SN II (e)",],
     'SN IIL': [
-        'SN II', 
+        'SN II',
         "SN II (e)",
         'SN II (w)', 'SN CC (a)'
     ],
@@ -341,7 +347,7 @@ TEMPLATE_CLOSE_TYPES = {
          'SN Ib/c (w)', 'SN CC (a)'
     ],
     'SN IIn': [
-        'SN IIn', 'SLSN (w)', "SLSN (e)", 'SLSN-II', 'SLSN-I', # SLSN ...  
+        'SN IIn', 'SLSN (w)', "SLSN (e)", 'SLSN-II', 'SLSN-I', # SLSN ...
         'SN CC (a)',
     ],
     'SN Ia': [
@@ -350,14 +356,14 @@ TEMPLATE_CLOSE_TYPES = {
         'SN Ia (w)', 'SN Ia (a)', "SN Ia-91T (w)", 'SN Ia-91bg (w)', 'SN Ia-pec (w)',
     ],
     'SN Ib': [
-        'SN Ib', 'SN Ibn', "SN Ib (e)", "SN IIb", 'SN Ib/c', 
+        'SN Ib', 'SN Ibn', "SN Ib (e)", "SN IIb", 'SN Ib/c',
         'SN Ib/c (w)', 'SN CC (a)'
     ],
     'SN Ib/c': [
         'SN Ib/c (w)', 'SN CC (a)', "SN Ib/c (e)",  'SN Ib/c',
     ],
     'SN Ic': [
-        'SN Ic',  "SN Ic (e)", 'SN Ic-BL', 
+        'SN Ic',  "SN Ic (e)", 'SN Ic-BL',
         'SN Ib/c (w)', 'SN CC (a)',  'SN Ib/c',
     ],
     'SN Ic-BL': [

@@ -11,4 +11,4 @@ Useful reading order:
 5. `v2_III_colors.ipynb` and `warptemplate_colors.ipynb`: peak-colour distributions.
 6. `warpcoeff_distcolcorr.ipynb` and `warpcoeff_colorcorrect*.ipynb`: colour-correction calibration and checks.
 
-These notebooks are provenance, not the preferred runtime API. New code should generally use `WarpfitTemplateLoader` and the helpers exported by the `warpTemplate` package.
+These notebooks are provenance, not the preferred runtime API. New code should generally use `WarpfitTemplateLoader` and the helpers exported by the `warptemplate` package.

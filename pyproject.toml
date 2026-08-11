@@ -1,24 +1,27 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [project]
-name = "warpTemplate"
+name = "warptemplate"
 version = "0.1.0"
 description = "Warped SN time series templates and correction models for sncosmo."
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Jakob Nordin"}
+]
+maintainers = [
+    {name = "Felix Fischer", email = "felix.martin.fischer@desy.de"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
-license = {file = "LICENSE"}
+requires-python = ">=3.11,<3.13"
+license = "MIT"
 keywords = ["supernova", "sncosmo", "time series", "templates", "warp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
-    "Programming Language :: Python :: 3.10",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
 dependencies = [
@@ -29,6 +32,10 @@ dependencies = [
     "extinction>=0.4",
     "matplotlib>=3.7",
     "pandas>=1.5",
+    "seaborn>=0.13.2,<0.14.0",
+    "pymongo>=4.17,<5.0",
+    "iminuit>=2.32,<3.0",
+    "scikit-learn>=1.9,<2.0",
     "skysurvey>=0.31,<0.32",
     "pyarrow>=10",
     "h5py>=3.8"
@@ -36,20 +43,40 @@ dependencies = [
 
 [project.optional-dependencies]
 classification = [
-    "scikit-learn>=1.1",
     "lightgbm>=3.3",
     "lcdata>=1.1",
     "torch>=2.0",
-    "seaborn>=0.12",
-    "jupyterlab>=4",
-    "supernnova>=3.0"
+    "jupyterlab>=4"
 ]
 
-[tool.setuptools]
-packages = ["warpTemplate", "warpTemplate.config"]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+]
+ampel = [
+    "ampel-ztf (>=0.10.3a7,<0.11.0)",
+]
 
-[tool.setuptools.package-dir]
-warpTemplate = "."
+[project.urls]
+Homepage = "https://github.com/wombaugh/warpTemplate"
+Repository = "https://github.com/wombaugh/warpTemplate"
 
-[tool.setuptools.package-data]
-warpTemplate = ["config/*.json"]
+[tool.poetry]
+packages = [{include = "warptemplate"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+numpy = ">=1.23"
+scipy = ">=1.9"
+astropy = ">=5.1"
+sncosmo = ">=2.0"
+extinction = ">=0.4"
+matplotlib = ">=3.7"
+pandas = ">=1.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+black = ">=22.0"
+
+[tool.poetry.group.ampel.dependencies]
+ampel-ztf = ">=0.10.3a7, <0.11.0"

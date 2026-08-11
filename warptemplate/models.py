@@ -1,7 +1,6 @@
 """Model constructors for warped spectral time-series sources."""
 
 from typing import Any, Mapping, Optional
-import warnings
 
 import numpy as np
 import sncosmo
@@ -24,7 +23,7 @@ def get_warpedTimeSeriesModel(
     samplecorr_ebv=None,
     samplecorr_rv=3.1,
     samplecorr_bands=None,
-) -> sncosmo.Model:
+) -> sncosmo.Model | None:
     """
     Create a `sncosmo.Model` using a warped TimeSeriesSource with optional
     host galaxy and Milky Way dust extinction.
@@ -91,6 +90,8 @@ def get_warpedTimeSeriesModel(
         wave = np.asarray(corr["wave"], dtype=float)
         flux = np.asarray(corr["flux"], dtype=float)
     except KeyError as e:
+        if warpdata.get("success") is False:
+            return None
         raise KeyError(
             f"Missing required warpdata key: {e}. "
             "Expected structure: warpdata['corrmodel']['phase'|'wave'|'flux']"
@@ -155,8 +156,8 @@ def get_warpedTimeSeriesModel(
 
     if use_host_dust and hostr_v is not None:
         model.set(hostr_v=hostr_v)
-    elif not use_host_dust and hostr_v is not None:
-        warnings.warn("hostr_v ignored because use_host_dust=False")
+#    elif not use_host_dust and hostr_v is not None:
+#        warnings.warn("hostr_v ignored because use_host_dust=False")
 
     if use_mw_dust:
         model.set(mwebv=mwebv)
