@@ -103,10 +103,12 @@ class WarpfitTemplateLoader:
         self,
         warpcoeffs_dir: str,
         version: str = "4",
+        suffix: str = "_col",
         logger: Optional[logging.Logger] = None
     ):
         self.warpcoeffs_dir = warpcoeffs_dir
         self.version = version
+        self.suffix = suffix
         self._cache: Dict[str, list] = {}
 
         if logger is None:
@@ -131,6 +133,11 @@ class WarpfitTemplateLoader:
             Identifier used to construct filename:
                 warpcoeffs_<fitclass>_col.pkl
                 _col suffix indicates that the file contains color correction data (ebv_meancol_corr)
+        version: str 
+            Version string used in filename:
+                warpcoeffs_v<version>_<fitclass>_col.pkl
+        suffix: str
+            Optional suffix for filename (default: "_col")
 
         Returns
         -------
@@ -150,7 +157,7 @@ class WarpfitTemplateLoader:
 
         filepath = os.path.join(
             self.warpcoeffs_dir,
-            f"warpcoeffs_v{self.version}_{key}.pkl"
+            f"warpcoeffs_v{self.version}_{key}{self.suffix}.pkl"
         )
 
 

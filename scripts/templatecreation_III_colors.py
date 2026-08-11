@@ -419,8 +419,8 @@ def run_analysis(args: argparse.Namespace) -> dict:
     class_name = get_class_name(args.category, args.cid)
     print(f"Processing class: {class_name}")
 
-    # Initialize loader
-    warploader = WarpfitTemplateLoader(args.warpdir, version=args.version)
+    # Initialize loader (assuming no color version)
+    warploader = WarpfitTemplateLoader(args.warpdir, version=args.version, suffix='')
 
     # Count templates by quality tier
     tcounting = {}
