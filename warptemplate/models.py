@@ -96,7 +96,6 @@ def get_warpedTimeSeriesModel(
         if warpdata['success'] is False:
             print('... warpfit failed, not creating model')
             return None
-        print(warpdata)
         raise KeyError(
             f"Missing required warpdata key: {e}. "
             "Expected structure: warpdata['corrmodel']['phase'|'wave'|'flux']"
@@ -107,6 +106,8 @@ def get_warpedTimeSeriesModel(
             f"Inconsistent warp data shapes: "
             f"flux.shape={flux.shape}, expected ({phase.size}, {wave.size})"
         )
+
+
 
     # Determine mean color warping to add if requested
     #if samplecorr_ebv is not None:

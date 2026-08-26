@@ -119,8 +119,12 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         # Apply optional reddening correction to the warp factor
         if warp_reddening_ebv is not None:
 
+            # ccm89 returns extinction curve A(lambda)/A(V)
+            # Ensure wave is float64 as class attribute
+            wave = np.ascontiguousarray(self._wave, dtype=np.float64)
+
             warped_flux = extinction.apply(
-                extinction.ccm89(self._wave, warp_reddening_ebv * warp_reddening_rv, warp_reddening_rv), 
+                extinction.ccm89(wave, float(warp_reddening_ebv * warp_reddening_rv), float(warp_reddening_rv)), 
                 warped_flux
                 )
 

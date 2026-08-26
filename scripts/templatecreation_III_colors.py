@@ -272,21 +272,6 @@ def color_with_ebv(
         - warped_model.bandmag(band2, 'ab', t0_2)
     )
 
-def color_with_ebv(
-    warped_model: sncosmo.Model,
-    ebv: float,
-    rv: float,
-    band1: str,
-    band2: str,
-    t0_1: float,
-    t0_2: float,
-) -> float:
-    """Evaluate color of warped model with given E(B-V)."""
-    warped_model.set(hostebv=ebv, hostr_v=rv)
-    return (
-        warped_model.bandmag(band1, 'ab', t0_1)
-        - warped_model.bandmag(band2, 'ab', t0_2)
-    )
 
 def _get_progress_bar(iterable, desc: str, total: int | None = None, disable: bool = False):
     """Wrapper for tqdm with graceful fallback."""
@@ -308,7 +293,7 @@ def _get_progress_bar(iterable, desc: str, total: int | None = None, disable: bo
 def compute_ebv_correlations(
     templates: list[dict],
     cols: dict[str, float],
-    peakphases: dict[str, dict[str, float]],
+    peakphases: dict[float],
     colband: list[str],
     K: float,
     loc: float,
@@ -347,10 +332,9 @@ def compute_ebv_correlations(
         )
         warped_model.set(z=0)
 
-        t0_0 = peakphases[modid][colband[0]]
-        t0_1 = peakphases[modid][colband[1]]
+        t0 = peakphases[modid]
 
-        valid_templates.append((k, modid, natcol, warped_model, t0_0, t0_1))
+        valid_templates.append((k, modid, natcol, warped_model, t0))
 
     # Outer progress bar: templates
     template_iter = _get_progress_bar(
@@ -360,13 +344,13 @@ def compute_ebv_correlations(
         disable=disable_progress,
     )
 
-    for k, modid, natcol, warped_model, t0_0, t0_1 in template_iter:
+    for k, modid, natcol, warped_model, t0 in template_iter:
         def fit_function(ebv: float) -> float:
             return np.abs(
                 color_with_ebv(
                     warped_model, ebv, 3.1,
                     colband[0], colband[1],
-                    t0_0, t0_1,
+                    t0, t0,
                 ) - target_col
             )
 
@@ -454,7 +438,7 @@ def run_analysis(args: argparse.Namespace) -> dict:
 
     cols: dict[str, float] = {}
     obscols: dict[str, float | None] = {}
-    peakphases: dict[str, dict[str, float]] = {}
+    peakphases: dict[float] = {}
 
     for t in templates:
         modid = t['model'].description
@@ -462,14 +446,14 @@ def run_analysis(args: argparse.Namespace) -> dict:
             print(f'skipping {modid}')
             continue
 
-        t0_0 = t['model'].source.peakphase(colband[0])
-        t0_1 = t['model'].source.peakphase(colband[1])
-        peakphases[modid] = {colband[0]: t0_0, colband[1]: t0_1}
+        # As peak phase, try to continously use peak in ztfg 
+        t0 = t['model'].source.peakphase('ztfg')
+        peakphases[modid] = t0 
 
         t['model'].set(z=0)
         cols[modid] = (
-            t['model'].bandmag(colband[0], 'ab', t0_0)
-            - t['model'].bandmag(colband[1], 'ab', t0_1)
+            t['model'].bandmag(colband[0], 'ab', t0)
+            - t['model'].bandmag(colband[1], 'ab', t0)
         )
         obscols[modid] = t.get('peak_gp_ztfg-ztfr', None)
 
@@ -514,11 +498,9 @@ def run_analysis(args: argparse.Namespace) -> dict:
     # Augment warp data with peak colors
     safe_class = class_name.replace("/", "")
     
-    # Access cached data properly: it's {"warpcoeff": {...}, "model_colors": {...}}
-    cached = warploader._cache[safe_class]  # or warploader._load_coeffs(class_name) if not cached
-    warpcoeff = cached["warpcoeff"]
+    # Use public API for data mutation
+    warpcoeff = warploader.get_warpcoeff(safe_class)
 
-    # Mutate entries in place, adding peakcol to each warpfit dict
     for snbase, snwarplist in warpcoeff.items():
         for snwarp in snwarplist:
             mname = snwarp['id'] + '_' + snwarp['model']
@@ -529,13 +511,12 @@ def run_analysis(args: argparse.Namespace) -> dict:
             snwarp['peakcol'] = cols.get(full_id, np.nan)
             print(mname, cols.get(full_id, np.nan))
 
-    # Update model_colors in the cached structure
-    cached['model_colors'] = model_colors
+    # Update via public API
+    warploader.update_warpcoeff(safe_class, warpcoeff)
+    warploader.update_model_colors(safe_class, model_colors)
 
-    # Save — the structure is already correct, no need to rebuild
-    pkl_path = args.warpdir / f"warpcoeffs_v{args.version}_{safe_class}_col.pkl"
-    with open(pkl_path, 'wb') as f:
-        pickle.dump(cached, f)
+    # Persist to disk
+    pkl_path = Path(warploader.save_class(safe_class))
 
 
     return {
