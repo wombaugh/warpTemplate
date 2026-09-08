@@ -159,12 +159,56 @@ class WarpfitTemplateLoaderTest(unittest.TestCase):
         self.assertEqual(len(unfiltered), 3)
 
     def test_get_model_colors_returns_copy(self):
+        """Callers must not mutate cached distribution metadata accidentally."""
+
         loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
 
         colors = loader.get_model_colors("SN Test")
         colors["loc"] = 99
 
         self.assertEqual(loader.get_model_colors("SN Test")["loc"], 0.7)
+
+    def test_public_update_and_save_api_preserves_compact_v4_structure(self):
+        """Creation scripts can update and persist v4 data without private access."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        warpcoeff = loader.get_warpcoeff("SN Test")
+        warpcoeff["basis_a"][0]["peakcol"] = 0.25
+        colors = loader.get_model_colors("SN Test")
+        colors["loc"] = 0.75
+        loader.update_warpcoeff("SN Test", warpcoeff)
+        loader.update_model_colors("SN Test", colors)
+
+        output_path = self.coeff_dir / "updated.pkl"
+        self.assertEqual(loader.save_class("SN Test", output_path), str(output_path))
+        with output_path.open("rb") as handle:
+            persisted = pickle.load(handle)
+
+        self.assertEqual(persisted["warpcoeff"]["basis_a"][0]["peakcol"], 0.25)
+        self.assertEqual(persisted["model_colors"]["loc"], 0.75)
+
+    def test_harmonize_uses_the_fitted_distribution_median(self):
+        """Harmonization must target the EMG median selected by upstream."""
+
+        loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
+        template = loader.get_templates(
+            "SN Test",
+            snbasis_selection=1,
+            template_selection=1,
+            random_seed=2,
+            color_mode="harmonize",
+        )[0]
+        descriptor = loader.get_template_descriptors(
+            "SN Test",
+            snbasis_selection=1,
+            template_selection=1,
+            random_seed=2,
+            color_mode="harmonize",
+        )[0]
+        expected = float(self.module.exponnorm(0.5, loc=0.7, scale=0.1).median())
+
+        self.assertAlmostEqual(template["target_peak_color"], expected)
+        self.assertAlmostEqual(descriptor.target_peak_color, expected)
 
     def test_target_mode_requires_target_peak_color(self):
         loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
