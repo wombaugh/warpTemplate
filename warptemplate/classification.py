@@ -645,26 +645,27 @@ def prepare_persistent_split(
     artifact_dir: str | Path,
     strategy: str = "template_key",
     seed: int = DEFAULT_SPLIT_SEED,
-    overwrite: bool = False,
+    action: str = "run",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load a frozen split or create and persist it as an experiment artifact.
+    """Explicitly create or load one frozen split artifact.
 
-    Reusing the same manifest ensures that different backends see identical objects.
-    Existing artifacts are never silently rebuilt; ``overwrite=True`` is required
-    when the caller deliberately changes the split definition or source sample.
+    ``action="run"`` creates the selected split and refuses to replace an existing
+    split file.  ``action="load"`` reads the fixed split and exclusion paths directly,
+    so a missing artifact produces pandas' normal file error.  Reusing the same
+    manifest ensures that different backends see identical objects.
     """
+    if action not in {"run", "load"}:
+        raise ValueError("Split action must be 'run' or 'load'")
     artifact_dir = Path(artifact_dir)
     split_path = artifact_dir / f"split_{strategy}_seed{seed}.parquet"
     excluded_path = artifact_dir / "excluded_objects.parquet"
-    if split_path.exists() and excluded_path.exists() and not overwrite:
+    if action == "load":
         manifest = pd.read_parquet(split_path)
         excluded = pd.read_parquet(excluded_path)
         validate_split_manifest(manifest)
         return manifest, excluded
-    if split_path.exists() and not excluded_path.exists() and not overwrite:
-        raise RuntimeError(
-            "Split artifacts are incomplete; inspect them and use overwrite=True to rebuild"
-        )
+    if split_path.exists():
+        raise FileExistsError(f"Refusing to replace frozen split: {split_path}")
 
     truth_columns = [
         "object_id",
@@ -680,21 +681,19 @@ def prepare_persistent_split(
     if "survey_realization_id" in truth:
         truth_columns.append("survey_realization_id")
     truth = truth[truth_columns]
-    counts = prepare_grouped_epoch_counts(
-        sample_dir, artifact_dir, overwrite=overwrite
-    )
+    counts = prepare_grouped_epoch_counts(sample_dir, artifact_dir)
     manifest, excluded = create_grouped_split_manifest(
         truth, strategy=strategy, seed=seed, epoch_counts=counts
     )
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    write_table_once(manifest, split_path, overwrite=overwrite)
+    write_table_once(manifest, split_path)
     # Exclusions are independent of strategy; both strategies must reproduce them.
-    if excluded_path.exists() and not overwrite:
+    if excluded_path.exists():
         existing = pd.read_parquet(excluded_path).sort_values("object_id").reset_index(drop=True)
         if not existing.equals(excluded):
             raise ValueError("Existing excluded-object manifest does not match this sample")
     else:
-        write_table_once(excluded, excluded_path, overwrite=overwrite)
+        write_table_once(excluded, excluded_path)
     return manifest, excluded
 
 
@@ -1392,6 +1391,56 @@ def build_experiment_metadata(
     }
 
 
+def load_run_metadata(
+    path: str | Path,
+    expected_config: ExperimentConfig | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Load run metadata and optionally validate its configuration identity.
+
+    The path is read directly: a missing file raises the ordinary
+    :class:`FileNotFoundError`.  Validation checks both the human-facing ``run_id``
+    and the scientific configuration hash, so reusing a readable run name with
+    changed settings fails before model artifacts are consumed.
+    """
+    payload = json.loads(Path(path).read_text())
+    if expected_config is None:
+        return payload
+    expected = (
+        expected_config.normalized()
+        if isinstance(expected_config, ExperimentConfig)
+        else dict(expected_config)
+    )
+    expected_run_id = expected.get("run_id") or make_run_id(expected)
+    expected_hash = configuration_hash(expected)
+    if payload.get("run_id") != expected_run_id:
+        raise ValueError(
+            f"Run metadata belongs to {payload.get('run_id')!r}, not {expected_run_id!r}"
+        )
+    if payload.get("configuration_hash") != expected_hash:
+        raise ValueError("Run name already belongs to a different configuration")
+    return payload
+
+
+def ensure_run_metadata(
+    config: ExperimentConfig,
+    split_manifest: pd.DataFrame,
+    path: str | Path,
+    status: str = "configured",
+) -> dict[str, Any]:
+    """Create run metadata once or validate the existing record in one call.
+
+    This small idempotent operation is intentionally kept in the shared backend so
+    notebooks do not grow their own file-existence state machines.  Existing metadata
+    are never rewritten.
+    """
+    path = Path(path)
+    if path.exists():
+        return load_run_metadata(path, expected_config=config)
+    payload = build_experiment_metadata(config, split_manifest, status=status)
+    write_json_once(payload, path)
+    return payload
+
+
 def write_table_once(table: pd.DataFrame, path: str | Path, overwrite: bool = False) -> Path:
     """Write a Parquet artifact and require explicit permission to replace it."""
     path = Path(path)
@@ -1409,6 +1458,26 @@ def write_json_once(payload: Mapping[str, Any], path: str | Path, overwrite: boo
         raise FileExistsError(f"Refusing to replace frozen artifact: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
+    return path
+
+
+def write_parsnip_classifier_once(classifier: Any, path: str | Path) -> Path:
+    """Persist a ParSNIP classifier without silently replacing an existing model."""
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"Refusing to replace frozen classifier: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    classifier.write(str(path))
+    return path
+
+
+def save_figure_once(figure: Any, path: str | Path, **savefig_kwargs: Any) -> Path:
+    """Save a Matplotlib figure without replacing an existing visual artifact."""
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"Refusing to replace frozen figure: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, **savefig_kwargs)
     return path
 
 

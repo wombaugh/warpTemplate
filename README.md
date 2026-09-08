@@ -51,6 +51,34 @@ The notebooks are grouped by purpose:
 - [`notebooks/classification/`](notebooks/classification/) contains the
   ParSNIP and SuperNNova training and evaluation workflows.
 
+Large inputs and generated artifacts do not live in the Git repository.  The
+notebooks use one fixed sibling data directory:
+
+```text
+parent/
+├── warpTemplate/                  # this repository
+└── data/
+    ├── training_samples/
+    ├── classification_splits/
+    ├── classifier_runs/
+    ├── warpcoeff_v4/
+    ├── openuniverse_templates/    # two external base SEDs required by v4
+    ├── warp_source_cache_v1/
+    ├── ztf_data/
+    └── lsst_data/
+```
+
+```bash
+cd warpTemplate
+jupyter lab
+```
+
+Every workflow notebook derives `DATA_ROOT` from the installed `warptemplate`
+package location.  With the documented editable installation this always selects
+the `data/` directory beside the checkout, even when a notebook frontend gives the
+kernel a different working directory.  It does not search other directories when
+an input is missing.
+
 ## Installation
 
 `warptemplate` supports Python 3.11 and 3.12. Clone the canonical repository
@@ -111,7 +139,7 @@ The loader can also be used directly:
 ```python
 from warptemplate import WarpfitTemplateLoader
 
-loader = WarpfitTemplateLoader("data/warpcoeff_v4")
+loader = WarpfitTemplateLoader("../data/warpcoeff_v4")
 templates = loader.get_templates("SN Ia")
 ```
 
@@ -149,10 +177,10 @@ spec = WarpSampleSpec(
 )
 
 runner = WarpSimulationRunner(
-    "data/warpcoeff_v4",
-    source_cache_dir="data/warp_source_cache_v1",
+    "../data/warpcoeff_v4",
+    source_cache_dir="../data/warp_source_cache_v1",
 )
-manifest = runner.run(spec, "training_samples", resume=True)
+manifest = runner.run(spec, "../data/training_samples", resume=True)
 ```
 
 `survey_name` accepts `ztf`, `lsst`, and `combined`. Combined mode is a
@@ -188,11 +216,18 @@ splits, disposable smoke runs, and gated full-test evaluation.
 The optional classifier dependencies must be installed in the active notebook
 kernel. ParSNIP additionally requires the astronomical `astro-parsnip`
 distribution shown above; the recurrent workflow uses the local
-`WarpSequenceRNN` and does not require an external SuperNNova installation. The
-notebooks validate their kernel packages before adding the workspace path for the
-local `warptemplate` checkout, so neighbouring source copies cannot silently
-replace them. Generated splits, checkpoints, predictions, plots, and run products
-are excluded from Git.
+`WarpSequenceRNN` and does not require an external SuperNNova installation. Packages
+are imported directly, so a missing or incorrect installation raises the normal
+Python import error.
+
+Classifier notebooks use a readable `RUN_NAME` and an explicit action for each
+stage. `run` creates a new artifact, `load` reads the one fixed path, and `skip`
+does nothing. SuperNNova training additionally supports `resume`, which restores its
+complete optimizer, scheduler, epoch, and random state. ParSNIP deliberately has no
+resume action because its native checkpoint does not contain that state. Existing
+official test products are never overwritten; use a new `RUN_NAME` for a new
+experiment. All generated splits, checkpoints, predictions, plots, and run products
+remain below the external `../data` tree.
 
 ## Migrating an older checkout
 

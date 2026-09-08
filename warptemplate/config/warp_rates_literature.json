@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "units": "Gpc^-3 yr^-1 h70^3",
-  "notes": "Literature rate configuration for warpcoeff_v3 fitclasses. Rates are local volumetric rates unless rate_kind indicates a parent fraction. Derived rates are resolved by the adapter from parent rates and fractions. Entries marked missing_direct_rate are intentionally not silently estimated. Absolute-magnitude priors are stored separately under magabs_priors. Their source_band records the literature band; sncosmo_band records the band used by set_source_peakabsmag. No color or band conversion is silently applied.",
+  "notes": "Literature rate configuration for versioned Warp fitclasses. Rates are local volumetric rates unless rate_kind indicates a parent fraction. Derived rates are resolved by the adapter from parent rates and fractions. Entries marked missing_direct_rate are intentionally not silently estimated. Absolute-magnitude priors are stored separately under magabs_priors. Their source_band records the literature band; sncosmo_band records the band used by set_source_peakabsmag. No color or band conversion is silently applied.",
   "magabs_priors": {
     "SLSN (e)": {
       "status": "aggregate",
@@ -251,6 +251,23 @@
       ],
       "notes": "LF-peak proxy; no scatter is invented."
     },
+    "SN Ia-CSM": {
+      "status": "adopted",
+      "distribution": "uniform",
+      "min": -21.3,
+      "max": -19.0,
+      "sncosmo_band": "bessellb",
+      "magsys": "ab",
+      "source_band": "R",
+      "sources": [
+        {
+          "bibkey": "Silverman2013IaCSM",
+          "url": "https://arxiv.org/abs/1304.0763",
+          "note": "Observed, host-extinction-uncorrected SN Ia-CSM peak range: -21.3 <= M_R <= -19 mag."
+        }
+      ],
+      "notes": "Uniform over the observed R-band range. The simulation applies the values in bessellb without an unreported R-to-B conversion; source_band preserves that limitation."
+    },
     "SN Ia-SC": {
       "status": "adopted",
       "distribution": "uniform",
@@ -271,11 +288,16 @@
     "SN Ia-pec": {
       "status": "aggregate",
       "distribution": "children_mixture",
-      "children": ["SN Ia-SC", "SN Iax"],
+      "children": ["SN Ia-CSM", "SN Ia-SC", "SN Iax"],
       "sncosmo_band": "bessellb",
       "magsys": "ab",
       "source_band": "children",
       "sources": [
+        {
+          "bibkey": "Silverman2013IaCSM",
+          "url": "https://arxiv.org/abs/1304.0763",
+          "note": "Used for the Ia-CSM child prior."
+        },
         {
           "bibkey": "Ashall2021SC",
           "url": "https://arxiv.org/abs/2106.12140",
@@ -292,11 +314,16 @@
     "SN Ia-pec (w)": {
       "status": "aggregate",
       "distribution": "children_mixture",
-      "children": ["SN Ia-SC", "SN Iax"],
+      "children": ["SN Ia-CSM", "SN Ia-SC", "SN Iax"],
       "sncosmo_band": "bessellb",
       "magsys": "ab",
       "source_band": "children",
       "sources": [
+        {
+          "bibkey": "Silverman2013IaCSM",
+          "url": "https://arxiv.org/abs/1304.0763",
+          "note": "Used for the Ia-CSM child prior."
+        },
         {
           "bibkey": "Ashall2021SC",
           "url": "https://arxiv.org/abs/2106.12140",
@@ -729,7 +756,7 @@
       "status": "aggregate",
       "rate_kind": "volumetric",
       "parent": null,
-      "children": ["SN Ia (w)", "SN Ia-91T", "SN Ia-91bg", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
+      "children": ["SN Ia (w)", "SN Ia-91T", "SN Ia-91bg", "SN Ia-CSM", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
       "fraction_of_parent": null,
       "uncertainty": {"plus": 2000.0, "minus": 2000.0},
       "sources": [
@@ -753,7 +780,7 @@
       "status": "aggregate",
       "rate_kind": "volumetric",
       "parent": "SN Ia (a)",
-      "children": ["SN Ia-91T", "SN Ia-91bg", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
+      "children": ["SN Ia-91T", "SN Ia-91bg", "SN Ia-CSM", "SN Ia-SC", "SN Ia-pec", "SN Ia-pec (w)", "SN Iax"],
       "fraction_of_parent": null,
       "uncertainty": {"plus": 2000.0, "minus": 2000.0},
       "sources": [
@@ -818,6 +845,29 @@
       ],
       "notes": "Direct subtype rate from ASAS-SN Ia."
     },
+    "SN Ia-CSM": {
+      "rate_gpc3_yr": 29.0,
+      "status": "adopted",
+      "rate_kind": "volumetric",
+      "parent": "SN Ia (a)",
+      "fraction_of_parent": null,
+      "uncertainty": {"plus": 27.0, "minus": 21.0},
+      "sources": [
+        {
+          "bibkey": "Sharma2023ZTFFIaCSM",
+          "url": "https://arxiv.org/abs/2301.04637",
+          "note": "ZTF-BTS SN Ia-CSM rate: 29(+27,-21) Gpc^-3 yr^-1; the authors describe it as a likely lower limit."
+        }
+      ],
+      "alternative_sources": [
+        {
+          "bibkey": "Desai2024ASASSNIa",
+          "url": "https://arxiv.org/abs/2306.11100",
+          "note": "Independent ASAS-SN subtype fraction of 0.04%; reported as consistent with the ZTF-BTS range."
+        }
+      ],
+      "notes": "Direct local volumetric rate from the spectroscopically complete ZTF Bright Transient Survey; retain the large asymmetric statistical uncertainty."
+    },
     "SN Ia-SC": {
       "rate_gpc3_yr": 30.0,
       "status": "adopted",
@@ -840,10 +890,15 @@
       "status": "missing_direct_rate",
       "rate_kind": "derived_from_children",
       "parent": "SN Ia (a)",
-      "children": ["SN Ia-SC", "SN Iax"],
+      "children": ["SN Ia-CSM", "SN Ia-SC", "SN Iax"],
       "fraction_of_parent": null,
       "uncertainty": {"plus": null, "minus": null},
       "sources": [
+        {
+          "bibkey": "Sharma2023ZTFFIaCSM",
+          "url": "https://arxiv.org/abs/2301.04637",
+          "note": "Provides the direct Ia-CSM child rate."
+        },
         {
           "bibkey": "Desai2024ASASSNIa",
           "url": "https://arxiv.org/abs/2306.11100",
@@ -869,10 +924,15 @@
       "status": "missing_direct_rate",
       "rate_kind": "derived_from_children",
       "parent": "SN Ia (a)",
-      "children": ["SN Ia-pec", "SN Ia-SC", "SN Iax"],
+      "children": ["SN Ia-pec", "SN Ia-CSM", "SN Ia-SC", "SN Iax"],
       "fraction_of_parent": null,
       "uncertainty": {"plus": null, "minus": null},
       "sources": [
+        {
+          "bibkey": "Sharma2023ZTFFIaCSM",
+          "url": "https://arxiv.org/abs/2301.04637",
+          "note": "Provides the direct Ia-CSM child rate."
+        },
         {
           "bibkey": "Desai2024ASASSNIa",
           "url": "https://arxiv.org/abs/2306.11100",

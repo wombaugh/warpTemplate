@@ -1,18 +1,17 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-"""
-Module: openuniverse_registry.py
+"""Load the two OpenUniverse2024 base SEDs used by Warp v4 into sncosmo.
 
-Lädt OpenUniverse2024-Templates und registriert sie in sncosmo.
-Import des Moduls genügt zur Registrierung; alternativ `register_all()`
-explizit aufrufen.
+Registration is explicit through :func:`register_all` so importing
+``warptemplate`` never reads large data files or writes a cache.
 """
 
 import os
 import pickle
 import hashlib
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,7 +24,7 @@ import sncosmo
 
 BASE_DIR = os.environ.get(
     "WARPTEMPLATE_OPENUNIVERSE_DIR",
-    "/Users/jnordin/data/openUniverse24/MODELS-1_TRANSIENT_SED",
+    str(Path(__file__).resolve().parents[2] / "data" / "openuniverse_templates"),
 )
 THRESHOLD = 0.01
 
@@ -136,13 +135,22 @@ def _build_source(name, path, threshold=THRESHOLD, use_cache=True):
     return source
 
 
-def register_model(name, model_config, base_dir=BASE_DIR, force=True, use_cache=True):
+def register_model(
+    name,
+    model_config,
+    base_dir=BASE_DIR,
+    force=True,
+    use_cache=True,
+    strict=False,
+):
     """
     Einzelnes Modell laden und in sncosmo registrieren.
     """
     path = os.path.join(base_dir, model_config['dir'], model_config['fname'])
 
     if not os.path.exists(path):
+        if strict:
+            raise FileNotFoundError(path)
         warnings.warn(f"Datei nicht gefunden: {path}")
         return False
 
@@ -162,16 +170,56 @@ def register_model(name, model_config, base_dir=BASE_DIR, force=True, use_cache=
     return True
 
 
-def register_all(base_dir=BASE_DIR, force=True, use_cache=True):
+def register_all(
+    base_dir=BASE_DIR,
+    force=True,
+    use_cache=True,
+    strict=False,
+):
     """
     Alle konfigurierten Modelle registrieren.
     """
     success = {}
     for name, config in MODEL_REGISTRY.items():
         success[name] = register_model(
-            name, config, base_dir=base_dir, force=force, use_cache=use_cache
+            name,
+            config,
+            base_dir=base_dir,
+            force=force,
+            use_cache=use_cache,
+            strict=strict,
         )
     return success
+
+
+def ensure_registered(
+    name,
+    base_dir=BASE_DIR,
+    *,
+    use_cache=True,
+):
+    """Register a known OpenUniverse source on first use.
+
+    Unknown names are left to sncosmo's normal registry handling. A known name
+    with missing external SED data raises ``FileNotFoundError`` with the exact
+    expected path instead of an opaque registry error.
+    """
+
+    normalized_name = str(name).lower()
+    if normalized_name not in MODEL_REGISTRY:
+        return False
+    try:
+        sncosmo.get_source(normalized_name)
+        return True
+    except Exception:
+        return register_model(
+            normalized_name,
+            MODEL_REGISTRY[normalized_name],
+            base_dir=base_dir,
+            force=True,
+            use_cache=use_cache,
+            strict=True,
+        )
 
 
 def get_registered_names():

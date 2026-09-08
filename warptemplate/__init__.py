@@ -37,7 +37,7 @@ from .population import (
 )
 from .observer_population import draw_observer_redshift, observer_expected_count
 from .peakfitting_gp import estimate_peak_flux_multiband, get_peak_colors
-from .openuniverse_registry import get_registered_names, register_all
+from .openuniverse_registry import ensure_registered, get_registered_names, register_all
 
 __all__ = [
     "WarpedTimeSeriesSource",
@@ -82,5 +82,6 @@ __all__ = [
     "estimate_peak_flux_multiband",
     "get_peak_colors",
     "get_registered_names",
+    "ensure_registered",
     "register_all",
 ]

@@ -439,10 +439,24 @@ class _WarpTargetSampler:
                 color_rng = np.random.default_rng(
                     _stable_seed(spec.seed, fitclass, "color")
                 )
+
+                def iter_drawn_colors() -> Iterator[float]:
+                    """Yield fixed-size EMG blocks independent of batch boundaries."""
+
+                    while True:
+                        values = color_distribution.rvs(
+                            size=4096, random_state=color_rng
+                        )
+                        yield from np.asarray(values, dtype=float)
+
+                drawn_colors = (
+                    iter_drawn_colors() if color_mode == "draw" else None
+                )
             else:
                 color_poly = None
                 color_distribution = None
                 color_rng = None
+                drawn_colors = None
             redshift_rng = np.random.default_rng(
                 _stable_seed(spec.seed, fitclass, "redshift")
             )
@@ -526,14 +540,15 @@ class _WarpTargetSampler:
                         radec = np.asarray(list(islice(position_iter, expected)))
 
                     if color_mode == "draw":
-                        target_colors = np.asarray(
-                            color_distribution.rvs(
-                                size=expected, random_state=color_rng
-                            ),
+                        target_colors = np.fromiter(
+                            islice(drawn_colors, expected),
                             dtype=float,
+                            count=expected,
                         )
                     elif color_mode == "harmonize":
-                        target_colors = np.full(expected, float(model_colors["loc"]))
+                        target_colors = np.full(
+                            expected, float(color_distribution.median())
+                        )
                     elif color_mode == "target":
                         if spec.target_peak_color is None:
                             raise ValueError(

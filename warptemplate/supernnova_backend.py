@@ -592,9 +592,8 @@ def prepare_supernnova_database(
     minimum_training_epochs: int = 3,
     epoch_window_days: float = workflow.DEFAULT_EPOCH_WINDOW_DAYS,
     duplicate_strategy: str = "inverse_variance",
-    overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Create or validate the reusable HDF5 sequence database for one role manifest.
+    """Create one new HDF5 sequence database for a role manifest.
 
     Observation Parquet files are filtered and processed one fragment at a time.  An
     object is written only after validation and is rejected if it crosses fragments.
@@ -603,9 +602,10 @@ def prepare_supernnova_database(
     only.
 
     The database is first written to a sibling temporary path and then atomically
-    renamed.  Readers therefore see either the old complete cache or the new complete
-    cache, never a partially written HDF5 file.  If ``output_path`` already exists and
-    ``overwrite`` is false, its content identity must match exactly.
+    renamed.  Readers therefore see either no database or the new complete database,
+    never a partially written HDF5 file.  Existing output or temporary files are
+    refused; loading an existing database is the separate, explicit
+    :func:`load_supernnova_database_summary` operation.
 
     Returns a JSON-compatible summary of object counts, feature order, preprocessing,
     and normalization constants.
@@ -631,14 +631,8 @@ def prepare_supernnova_database(
         epoch_window_days,
         duplicate_strategy,
     )
-    if output_path.exists() and not overwrite:
-        with h5py.File(output_path, "r") as handle:
-            existing = str(handle.attrs.get("database_identity", ""))
-            if existing != identity:
-                raise FileExistsError(
-                    f"Existing SuperNNova database has incompatible identity: {output_path}"
-                )
-            return json.loads(str(handle.attrs["summary_json"]))
+    if output_path.exists():
+        raise FileExistsError(f"Refusing to replace sequence database: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     requested_ids = set(role_manifest["object_id"].astype(str))
@@ -664,7 +658,8 @@ def prepare_supernnova_database(
     skipped_short: list[str] = []
     requested_value_set = pa.array(sorted(requested_ids))
     temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    temporary_path.unlink(missing_ok=True)
+    if temporary_path.exists():
+        raise FileExistsError(f"Remove interrupted database temporary file: {temporary_path}")
     # Write to a temporary sibling so os.replace remains atomic on the same filesystem.
     with h5py.File(temporary_path, "w") as handle:
         datasets = _create_database_datasets(handle)
@@ -735,6 +730,20 @@ def prepare_supernnova_database(
         handle.flush()
     os.replace(temporary_path, output_path)
     return summary
+
+
+def load_supernnova_database_summary(database_path: str | Path) -> dict[str, Any]:
+    """Load the persisted summary from one existing sequence database.
+
+    No alternate location is searched and no database is generated.  HDF5 therefore
+    raises its normal error when the configured file is absent or unreadable.
+    """
+    with h5py.File(database_path, "r") as handle:
+        if int(handle.attrs["database_schema_version"]) != DATABASE_SCHEMA_VERSION:
+            raise ValueError("Sequence database schema does not match this backend")
+        if tuple(handle["features"][:].astype(str)) != ALL_FEATURES:
+            raise ValueError("Sequence database feature order does not match this backend")
+        return json.loads(str(handle.attrs["summary_json"]))
 
 
 def build_supernnova_settings(
@@ -1269,11 +1278,11 @@ def train_supernnova(
     database_path: str | Path,
     output_dir: str | Path,
     config: SuperNNovaTrainingConfig,
-    force: bool = False,
+    action: str = "run",
     show_progress: bool = True,
     max_epochs_this_call: int | None = None,
 ) -> dict[str, Any]:
-    """Train or resume one RNN and select its best validation checkpoint.
+    """Explicitly start or resume one RNN training run.
 
     Training uses class-weighted cross entropy, optional random-prefix augmentation,
     Adam optimization, gradient clipping, and a plateau learning-rate scheduler.  At
@@ -1282,10 +1291,13 @@ def train_supernnova(
     stopping and model selection use class-balanced validation log loss.  Test objects
     are never read in this function.
 
-    A completed run with matching database and configuration identity is reused unless
-    ``force`` is true.  ``max_epochs_this_call`` deliberately pauses a run after a
-    bounded number of epochs and is primarily useful for interruption/resume tests.
-    Once training completes, validation-only temperature scaling is stored in the best
+    ``action="run"`` requires a new output directory.  ``action="resume"`` requires
+    an incomplete ``last.pt`` checkpoint and restores all optimizer, scheduler, and
+    random state.  Loading a completed model is deliberately handled by
+    :func:`load_supernnova_checkpoint`, so this function never decides implicitly
+    between training and loading.  ``max_epochs_this_call`` deliberately pauses a run
+    after a bounded number of epochs and is primarily useful for resume tests.  Once
+    training completes, validation-only temperature scaling is stored in the best
     checkpoint when requested.
 
     Returns a JSON-compatible dictionary containing elapsed time and per-epoch metrics.
@@ -1293,6 +1305,8 @@ def train_supernnova(
     import torch
     from .sequence_rnn import WarpSequenceRNN
 
+    if action not in {"run", "resume"}:
+        raise ValueError("Training action must be 'run' or 'resume'")
     if max_epochs_this_call is not None and max_epochs_this_call < 1:
         raise ValueError("max_epochs_this_call must be positive when provided")
 
@@ -1306,7 +1320,8 @@ def train_supernnova(
         raise ValueError("SuperNNova training requires a validation partition")
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if action == "run":
+        output_dir.mkdir(parents=True, exist_ok=False)
     best_path = output_dir / "best.pt"
     last_path = output_dir / "last.pt"
     history_path = output_dir / "history.json"
@@ -1314,13 +1329,8 @@ def train_supernnova(
     expected_identity = workflow.configuration_hash(
         {**config.normalized(), "database_identity": store.database_identity}
     )
-    if complete_path.exists() and best_path.exists() and history_path.exists() and not force:
-        completion = json.loads(complete_path.read_text())
-        if completion.get("training_identity") != expected_identity:
-            raise FileExistsError(f"Completed run has incompatible configuration: {output_dir}")
-        if show_progress:
-            print(f"Using completed SuperNNova cache: {output_dir}")
-        return json.loads(history_path.read_text())
+    if action == "resume" and complete_path.exists():
+        raise RuntimeError("A completed SuperNNova run cannot be resumed; load it instead")
 
     settings = _model_settings(config, use_cuda)
     recurrent_features = feature_names(config.redshift_mode, config.engineered_features)
@@ -1349,7 +1359,7 @@ def train_supernnova(
     elapsed_before = 0.0
     rng = np.random.default_rng(config.seed)
 
-    if last_path.exists() and not force and not complete_path.exists():
+    if action == "resume":
         # Resume optimizer, scheduler, counters, and random streams together.  Loading
         # weights alone would change subsequent shuffling and prefix augmentation.
         resumed = torch.load(last_path, map_location=device, weights_only=False)
@@ -1567,6 +1577,11 @@ def train_supernnova(
             f"{elapsed / 60:.2f} min, best validation loss {best_loss:.4f}"
         )
     return result
+
+
+def load_supernnova_training_history(output_dir: str | Path) -> dict[str, Any]:
+    """Load a completed or paused training history from its fixed JSON path."""
+    return json.loads((Path(output_dir) / "history.json").read_text())
 
 
 def load_supernnova_checkpoint(

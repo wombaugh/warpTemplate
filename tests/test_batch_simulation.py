@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+from scipy.stats import exponnorm
 
 from warptemplate.batch_simulation import (
     WarpSampleSpec,
@@ -435,6 +436,18 @@ class WarpSampleSpecTest(unittest.TestCase):
                     )
                 if color_mode == "target":
                     np.testing.assert_allclose(drawn["target_peak_color"], 0.2)
+                elif color_mode == "harmonize":
+                    metadata = _WarpTargetSampler(
+                        coefficient_dir
+                    ).loader.get_model_colors("SN IIP")
+                    expected = exponnorm(
+                        float(metadata["K"]),
+                        loc=float(metadata["loc"]),
+                        scale=float(metadata["scale"]),
+                    ).median()
+                    np.testing.assert_allclose(
+                        drawn["target_peak_color"], expected
+                    )
 
     def test_runner_uses_skysurvey_and_resumes_completed_parquet_batches(self):
         """A real Warp model must pass through unmodified SkySurvey and resume safely."""

@@ -72,6 +72,7 @@ DEFAULT_ACTIVE_FITCLASSES_BROAD = [
 DEFAULT_ACTIVE_FITCLASSES_IA_SUBTYPE = [
     "SN Ia-91bg",
     "SN Ia-91T",
+    "SN Ia-CSM",
     "SN Ia-SC",
     "SN Iax",
 ]
@@ -81,6 +82,7 @@ DEFAULT_OVERLAP_CHILDREN = {
         "SN Ia (w)",
         "SN Ia-91bg",
         "SN Ia-91T",
+        "SN Ia-CSM",
         "SN Ia-SC",
         "SN Ia-pec",
         "SN Ia-pec (w)",
@@ -89,13 +91,14 @@ DEFAULT_OVERLAP_CHILDREN = {
     "SN Ia (w)": [
         "SN Ia-91bg",
         "SN Ia-91T",
+        "SN Ia-CSM",
         "SN Ia-SC",
         "SN Ia-pec",
         "SN Ia-pec (w)",
         "SN Iax",
     ],
-    "SN Ia-pec (w)": ["SN Ia-pec", "SN Ia-SC", "SN Iax"],
-    "SN Ia-pec": ["SN Ia-SC", "SN Iax"],
+    "SN Ia-pec (w)": ["SN Ia-pec", "SN Ia-CSM", "SN Ia-SC", "SN Iax"],
+    "SN Ia-pec": ["SN Ia-CSM", "SN Ia-SC", "SN Iax"],
     "SN CC (a)": [
         "SN II",
         "SN II (w)",

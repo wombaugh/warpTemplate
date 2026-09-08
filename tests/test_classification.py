@@ -311,6 +311,26 @@ class ExperimentAndMetricTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflow.assert_no_held_out_group_leakage(future, self.manifest)
 
+    def test_named_run_metadata_rejects_changed_configuration(self) -> None:
+        """A readable run name must not hide a changed scientific configuration."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "experiment.json"
+            named = workflow.ExperimentConfig(
+                training_sample="sample-a",
+                evaluation_sample="sample-a",
+                run_id="readable-baseline",
+            )
+            workflow.ensure_run_metadata(named, self.manifest, path)
+            workflow.load_run_metadata(path, named)
+            changed = workflow.ExperimentConfig(
+                training_sample="sample-a",
+                evaluation_sample="sample-a",
+                redshift_mode="photometry_only",
+                run_id="readable-baseline",
+            )
+            with self.assertRaises(ValueError):
+                workflow.load_run_metadata(path, changed)
+
 
 class ModelRoundTripTests(unittest.TestCase):
     """Exercise lightweight classifier and ParSNIP checkpoint round trips."""
@@ -383,10 +403,11 @@ class NotebookStyleTests(unittest.TestCase):
 
     def test_every_code_cell_starts_with_purpose_comment(self) -> None:
         """Code cells must be documented, compilable, clean, and kernel-first."""
-        notebook_dir = Path(__file__).parents[1] / "notebooks" / "classification"
+        notebook_root = Path(__file__).parents[1] / "notebooks"
         notebook_paths = (
-            notebook_dir / "train_parsnip_classifier.ipynb",
-            notebook_dir / "train_supernnova_classifier.ipynb",
+            notebook_root / "template_usage" / "skysurvey_warp_sample.ipynb",
+            notebook_root / "classification" / "train_parsnip_classifier.ipynb",
+            notebook_root / "classification" / "train_supernnova_classifier.ipynb",
         )
         for notebook_path in notebook_paths:
             notebook = json.loads(notebook_path.read_text())
@@ -403,22 +424,31 @@ class NotebookStyleTests(unittest.TestCase):
                 self.assertIsNone(cell.get("execution_count"))
                 compile(source, f"{notebook_path.name}-cell-{index}", "exec")
 
-        parsnip_source = "\n".join(
-            "".join(cell["source"])
-            for cell in json.loads(notebook_paths[0].read_text())["cells"]
-            if cell["cell_type"] == "code"
-        )
-        supernnova_source = "\n".join(
-            "".join(cell["source"])
-            for cell in json.loads(notebook_paths[1].read_text())["cells"]
-            if cell["cell_type"] == "code"
-        )
-        self.assertLess(
-            parsnip_source.index('parsnip = import_kernel_dependency('),
-            parsnip_source.index("sys.path.insert(0, str(PROJECT_ROOT))"),
-        )
+        combined_sources = {}
+        for notebook_path in notebook_paths:
+            combined_sources[notebook_path.name] = "\n".join(
+                "".join(cell["source"])
+                for cell in json.loads(notebook_path.read_text())["cells"]
+                if cell["cell_type"] == "code"
+            )
+        parsnip_source = combined_sources["train_parsnip_classifier.ipynb"]
+        supernnova_source = combined_sources["train_supernnova_classifier.ipynb"]
+        for source in combined_sources.values():
+            self.assertIn("import warptemplate", source)
+            self.assertIn(
+                'DATA_ROOT = Path(warptemplate.__file__).resolve().parents[2] / "data"',
+                source,
+            )
+            self.assertNotIn("sys.path", source)
+            self.assertNotIn("sys.modules", source)
+            self.assertNotIn("search_roots", source)
+            self.assertNotIn(".exists()", source)
+            self.assertNotIn("FORCE_", source)
+            self.assertNotIn("ALLOW_TEST_OVERWRITE", source)
+        self.assertIn("import parsnip", parsnip_source)
+        self.assertIn("from warptemplate import classification", parsnip_source)
         self.assertIn("from warptemplate import supernnova_backend", supernnova_source)
-        self.assertNotIn('importlib.import_module("supernnova")', supernnova_source)
+        self.assertNotIn('\nimport supernnova\n', f'\n{supernnova_source}\n')
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from typing import Any, Optional
 import numpy as np
 from astropy import time
 from astropy.cosmology import Planck18
+from scipy.integrate import trapezoid
 from skysurvey.tools.utils import parse_skyarea, surface_of_skyarea
 
 from .population import MissingRateError
@@ -156,8 +157,8 @@ def observer_expected_count(
 
     redshift_grid = np.linspace(float(zmin), float(zmax), int(grid_size))
     density = _observer_rate_density(redshift_grid, rate, cosmology)
-    # np.trapz supports the package's declared NumPy >=1.23 compatibility range.
-    rate_per_observer_year = float(np.trapezoid(density, redshift_grid))
+    # SciPy's spelling works across the full declared NumPy compatibility range.
+    rate_per_observer_year = float(trapezoid(density, redshift_grid))
     return rate_per_observer_year * float(nyears) * float(sky_fraction)
 
 

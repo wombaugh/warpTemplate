@@ -66,6 +66,9 @@ class WarpfitTemplateLoader:
             warpcoeffs_<fitclass>.pkl
     logger : logging.Logger, optional
         Logger instance. If None, a default logger is created.
+    openuniverse_dir : path-like, optional
+        Directory containing the external OpenUniverse SED folders. By default,
+        it is resolved beside the configured coefficient directory.
 
     Notes
     -----
@@ -128,7 +131,8 @@ class WarpfitTemplateLoader:
         warpcoeffs_dir: str,
         version: str = "4",
         suffix: str = "_col",
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        openuniverse_dir: Optional[str | Path] = None,
     ):
         """Initialize the coefficient directory, logger, and fitclass cache."""
 
@@ -136,6 +140,11 @@ class WarpfitTemplateLoader:
         self.version = str(version)
         self.suffix = str(suffix)
         self._cache: Dict[str, Dict[str, Any]] = {}
+        self.openuniverse_dir = (
+            Path(openuniverse_dir)
+            if openuniverse_dir is not None
+            else Path(warpcoeffs_dir).resolve().parent / "openuniverse_templates"
+        )
 
         if logger is None:
             logging.basicConfig(
@@ -334,6 +343,8 @@ class WarpfitTemplateLoader:
         corr = entry["mdict"]["corrmodel"]
         from .sources import DynamicColorWarpSource
 
+        self._ensure_base_source(descriptor.template_sn)
+
         return DynamicColorWarpSource.from_warp_grid(
             corr["phase"],
             corr["wave"],
@@ -341,6 +352,13 @@ class WarpfitTemplateLoader:
             descriptor.template_sn,
             name=f"{descriptor.basis_sn}_{descriptor.template_sn}",
         )
+
+    def _ensure_base_source(self, template_name: str) -> None:
+        """Register a known external v4 base using the coefficient data root."""
+
+        from .openuniverse_registry import ensure_registered
+
+        ensure_registered(template_name, base_dir=self.openuniverse_dir)
 
     # -------------------------
     # Public: access and mutate loaded data
@@ -692,6 +710,7 @@ class WarpfitTemplateLoader:
 #                    print(f"Color mode {color_mode}: applied_target_peak_color={applied_target_peak_color}, samplecorr_ebv={samplecorr_ebv}")
 
                 try:
+                    self._ensure_base_source(template_sn)
                     model = get_warpedTimeSeriesModel(
                         name=f"{sn_name}_{template_sn or 'tpl'}",
                         original_template_name=template_sn,
@@ -941,6 +960,7 @@ class WarpfitTemplateLoader:
         entry = collection["warpcoeff"][descriptor.basis_sn][descriptor.template_index]
         model_colors = collection.get("model_colors")
         if source is None:
+            self._ensure_base_source(descriptor.template_sn)
             model = get_warpedTimeSeriesModel(
                 name=f"{descriptor.basis_sn}_{descriptor.template_sn}",
                 original_template_name=descriptor.template_sn,

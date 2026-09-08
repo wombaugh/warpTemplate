@@ -41,9 +41,20 @@ def build_uncolored_warp_grid(
             f"({phase_arr.size}, {wave_arr.size})"
         )
 
-    original_source = sncosmo.get_source(
-        original_template_name, original_template_version
-    )
+    try:
+        original_source = sncosmo.get_source(
+            original_template_name, original_template_version
+        )
+    except Exception:
+        # v4 introduces two external OpenUniverse bases. Register only a known
+        # missing source on demand so ordinary imports remain side-effect free.
+        from .openuniverse_registry import ensure_registered
+
+        if not ensure_registered(original_template_name):
+            raise
+        original_source = sncosmo.get_source(
+            original_template_name, original_template_version
+        )
     warp_spline = Spline2d(
         phase_arr,
         wave_arr,

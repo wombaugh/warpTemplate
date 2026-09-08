@@ -252,8 +252,8 @@ class DatabaseAndTrainingTests(unittest.TestCase):
             )
             truth_store.close()
 
-    def test_changed_source_content_invalidates_database_cache(self) -> None:
-        """A modified observation artifact must not reuse a stale HDF5 cache."""
+    def test_database_run_refuses_existing_output_and_load_is_explicit(self) -> None:
+        """Database creation and loading should be separate explicit operations."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sample_dir = write_synthetic_ensemble(root, self.truth, self.observations)
@@ -262,14 +262,14 @@ class DatabaseAndTrainingTests(unittest.TestCase):
             backend.prepare_supernnova_database(
                 sample_dir, truth, self.role_manifest, database_path
             )
-            observation_path = next(sample_dir.glob("*/observations/**/*.parquet"))
-            changed = pd.read_parquet(observation_path)
-            changed.loc[0, "flux"] += 1.0
-            changed.to_parquet(observation_path, index=False)
+            summary = backend.load_supernnova_database_summary(database_path)
+            self.assertEqual(summary["objects"], len(self.role_manifest))
             with self.assertRaises(FileExistsError):
                 backend.prepare_supernnova_database(
                     sample_dir, truth, self.role_manifest, database_path
                 )
+            with self.assertRaises(FileNotFoundError):
+                backend.load_supernnova_database_summary(root / "missing.h5")
 
     def test_minimum_epoch_rule_applies_to_held_out_roles(self) -> None:
         """Validation and test objects should obey the same eligibility rule as train."""
@@ -336,10 +336,13 @@ class DatabaseAndTrainingTests(unittest.TestCase):
                 )
                 self.assertEqual(len(history["epochs"]), 1)
                 self.assertTrue((output_dir / "complete.json").exists())
-                cached_history = backend.train_supernnova(
-                    database_path, output_dir, config, show_progress=False
+                with self.assertRaises(FileExistsError):
+                    backend.train_supernnova(
+                        database_path, output_dir, config, show_progress=False
+                    )
+                self.assertEqual(
+                    backend.load_supernnova_training_history(output_dir), history
                 )
-                self.assertEqual(cached_history, history)
                 model, loaded_config = backend.load_supernnova_checkpoint(
                     output_dir / "best.pt", device="cpu"
                 )
@@ -417,7 +420,11 @@ class DatabaseAndTrainingTests(unittest.TestCase):
             )
             self.assertFalse((resumed / "complete.json").exists())
             resumed_history = backend.train_supernnova(
-                database_path, resumed, config, show_progress=False
+                database_path,
+                resumed,
+                config,
+                action="resume",
+                show_progress=False,
             )
             self.assertEqual(direct_history["epochs"], resumed_history["epochs"])
             direct_payload = torch.load(
@@ -428,6 +435,28 @@ class DatabaseAndTrainingTests(unittest.TestCase):
             )
             for name, tensor in direct_payload["model_state"].items():
                 self.assertTrue(torch.equal(tensor, resumed_payload["model_state"][name]))
+
+    def test_resume_requires_an_incomplete_checkpoint(self) -> None:
+        """Resume should fail normally when no paused checkpoint is present."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = self._prepare_database(root)
+            config = backend.SuperNNovaTrainingConfig(
+                epochs=1,
+                hidden_dim=8,
+                num_layers=1,
+                batch_size=8,
+                device="cpu",
+                threads=1,
+            )
+            with self.assertRaises(FileNotFoundError):
+                backend.train_supernnova(
+                    database_path,
+                    root / "missing-run",
+                    config,
+                    action="resume",
+                    show_progress=False,
+                )
 
     def test_attention_engineered_causal_variant_trains(self) -> None:
         """Opt-in engineered features, attention, and causal recurrence should compose."""

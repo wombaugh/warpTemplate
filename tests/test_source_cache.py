@@ -14,6 +14,7 @@ import sncosmo
 
 from warptemplate.loaders import WarpfitTemplateLoader
 from warptemplate.models import get_model_from_warped_source
+from warptemplate.openuniverse_registry import register_all
 from warptemplate.source_cache import WarpSourceCache
 from warptemplate.sources import DynamicColorWarpSource
 
@@ -169,6 +170,23 @@ class WarpSourceCacheTest(unittest.TestCase):
         """Release temporary cache files."""
 
         self.temporary.cleanup()
+
+    def test_strict_openuniverse_registration_reports_the_missing_sed(self):
+        """Strict registration must fail at the first fixed missing SED path."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            expected = (
+                Path(directory)
+                / "NON1ASED.TDE-BBFIT"
+                / "2019qiz.sed.gz"
+            )
+            with self.assertRaises(FileNotFoundError) as raised:
+                register_all(
+                    base_dir=directory,
+                    strict=True,
+                    use_cache=False,
+                )
+            self.assertEqual(Path(raised.exception.args[0]), expected)
 
     def test_build_load_resume_and_invalidate(self):
         """A valid cache resumes, while changed coefficients invalidate it."""

@@ -119,6 +119,10 @@ class WarpfitTemplateLoaderTest(unittest.TestCase):
             "warpcoeffs_v4_SNTest_col.pkl",
         )
         self.assertEqual(loader.available_fitclasses(), ["SN Test"])
+        self.assertEqual(
+            loader.openuniverse_dir,
+            self.coeff_dir.resolve().parent / "openuniverse_templates",
+        )
 
     def test_target_color_metadata_and_correction(self):
         loader = self.module.WarpfitTemplateLoader(str(self.coeff_dir))
