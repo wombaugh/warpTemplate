@@ -353,7 +353,7 @@ TEMPLATE_CLOSE_TYPES = {
     'SN Ia': [
         'SN Ia', 'Ia-pec', 'Ia-CSM', 'Ia-SC', 'SN Ia-SC', 'Ia-91T',   'SN Ia-pec',     # Adding all the Ia subclasses since few other templates
         "SN Ia-91bg (e)", "SN Ia (e)", "SN Ia-91T (e)", 'SN Ia-CSM', 'SN Ia-91bg', 'SN Ia-91T', "SN Iax",
-        'SN Ia (w)', 'SN Ia (a)', "SN Ia-91T (w)", 'SN Ia-91bg (w)', 'SN Ia-pec (w)',
+        'SN Ia (w)', 'SN Ia (a)', 'SN Ia-91bg (w)', 'SN Ia-pec (w)',
     ],
     'SN Ib': [
         'SN Ib', 'SN Ibn', "SN Ib (e)", "SN IIb", 'SN Ib/c', 

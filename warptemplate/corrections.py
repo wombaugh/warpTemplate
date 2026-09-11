@@ -465,7 +465,6 @@ def get_template_correction(
     rv: float = 3.1,
     max_phases: Optional[List[float]] = None,
     require_phasecoverage: bool = True,
-    spline_lam: float = 0.1,
     plot_dir: Optional[str] = None,
     plot_label: str = 'ZTF',
 ) -> TemplateCorrectionResult:
@@ -538,9 +537,6 @@ def get_template_correction(
             Only use phases directly covered by data
         If False:
             Extend correction to edges using buffers → correction → 1
-
-    spline_lam : float, optional
-        Smoothing parameter for spline interpolation.
 
     plot_dir : str, optional
         If provided, diagnostic plots are generated.
@@ -844,7 +840,6 @@ def get_template_correction(
         ]
 
         # Interpolation methodology
-#        finterp, dfinterp = get_spline_interp(band_phase, band_corr, band_err, tphase, lam=spline_lam )
         finterp, dfinterp = get_gp_interp(band_phase, band_corr, band_err, tphase )
 
         mdict['corrdata'][band] = {
@@ -860,25 +855,46 @@ def get_template_correction(
     # -------------------------
     # Build 2D correction model
     # -------------------------
-    wave = [m.minwave()]
+    #wave = [m.minwave()]
+    #phase: npt.NDArray[np.float64] = np.array([])
+    #flux: List[npt.NDArray[np.float64]] = []
+
+    #for band in ['ztfg', 'ztfr', 'ztfi']:
+    #    if band not in mdict['corrdata']:
+    #        continue
+
+    #    wave.append(mdict['corrdata'][band]['wave'])
+
+    #    if len(flux) == 0:
+    #        phase = mdict['corrdata'][band]['tphase']
+    #        flux = [np.ones(len(phase))]
+    #        flux.append(mdict['corrdata'][band]['tcorr'])
+    #    else:
+    #        flux.append(mdict['corrdata'][band]['tcorr'])
+
+    #wave.append(m.maxwave())
+    #flux.append(np.ones(len(phase)))
+
+
+    wave = []
     phase: npt.NDArray[np.float64] = np.array([])
     flux: List[npt.NDArray[np.float64]] = []
 
     for band in ['ztfg', 'ztfr', 'ztfi']:
         if band not in mdict['corrdata']:
             continue
-
         wave.append(mdict['corrdata'][band]['wave'])
-
-        if len(flux) == 0:
-            phase = mdict['corrdata'][band]['tphase']
-            flux = [np.ones(len(phase))]
-            flux.append(mdict['corrdata'][band]['tcorr'])
-        else:
-            flux.append(mdict['corrdata'][band]['tcorr'])
-
-    wave.append(m.maxwave())
-    flux.append(np.ones(len(phase)))
+        flux.append(mdict['corrdata'][band]['tcorr'])
+        phase = mdict['corrdata'][band]['tphase']
+            
+    # Buffer points at edges to ensure correction → 1 at edges
+    # as long as model extends to those phases. If not, we do not add buffer points.
+    if m.minwave() < min(wave):
+        wave.insert(0, m.minwave())
+        flux.insert(0, np.ones(len(phase)))
+    if m.maxwave() > max(wave):
+        wave.append(m.maxwave())
+        flux.append(np.ones(len(phase)))
 
     flux2d = np.array(flux).transpose()
 

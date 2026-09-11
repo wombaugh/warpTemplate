@@ -36,10 +36,10 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         If True, negative flux values after warping are set to zero.
     time_spline_degree : int, optional (default=3)
         Degree of the spline interpolation in the phase dimension.
-    warp_reddening_ebv: float, optional
-        If provided, applies a reddening correction to the warp function using the specified E(B-V)
-    warp_reddening_rv: float (default=3.1)
-        R_V value to use for the reddening correction if `warp_reddening_ebv` is provided.
+    warp_reddening_a: float, optional
+        If provided, applies a linearized reddening-like correction to the warp function using the specified amplitude
+    warp_reddening_pivot: float (default=6250.)
+        Pivot wavelength used for warp reddening. Used if `warp_reddening_ebv` is provided.
     name : str, optional
         Name of this warped source.
     version : str, optional
@@ -55,8 +55,8 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         original_template_version: Optional[str] = None,
         cut_negative_flux: bool = True,
         time_spline_degree: int = 3,
-        warp_reddening_ebv: Optional[float] = None,
-        warp_reddening_rv: float = 3.1,
+        warp_reddening_a: Optional[float] = None,
+        warp_reddening_pivot: float = 6250.,
         name: Optional[str] = None,
         version: Optional[str] = None,
     ) -> None:
@@ -117,16 +117,12 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         warped_flux: npt.NDArray[np.float64] = original_flux * warp_factor
 
         # Apply optional reddening correction to the warp factor
-        if warp_reddening_ebv is not None:
+        if warp_reddening_a is not None:
 
             # ccm89 returns extinction curve A(lambda)/A(V)
             # Ensure wave is float64 as class attribute
             wave = np.ascontiguousarray(self._wave, dtype=np.float64)
-
-            warped_flux = extinction.apply(
-                extinction.ccm89(wave, float(warp_reddening_ebv * warp_reddening_rv), float(warp_reddening_rv)), 
-                warped_flux
-                )
+            warped_flux *= 10.**(-0.4 * warp_reddening_a * (wave / warp_reddening_pivot - 1.))
 
         # Clip negative values if requested
         if cut_negative_flux:
