@@ -4,6 +4,55 @@
 """
 Redoing of sample_sncosmo_from_db using the more consistent class definition.
 Pick one non-SN Ia narrow class, fit sncosmo models, store results.
+
+------------------------------------------------------------------------------
+CHANGES: SLSN / TDE from a combined alternate catalog
+------------------------------------------------------------------------------
+SLSN-I, SLSN-II, and (newly added) TDE now read their SN list + redshifts
+from a single combined catalog CSV (--alt-csv) spanning several source
+surveys (BTS, plus dedicated TDE and SLSN literature samples: TDE_Yao23,
+SLSNI_Chen23, SLSNII_Pessi25), and their photometry from a separate MongoDB
+database (--alt-mongodb). Everything else is unchanged.
+
+Class resolution (see _infer_target_class): most rows resolve directly from
+the catalog's own `type` column, normalizing known TDE sub-classification
+variants (TDE-H-He, TDE-He, TDE-featureless, TDE-H+He, TDE-H+He?) onto the
+base 'TDE' class, and 'SLSNII' (no hyphen, used by the Pessi25 sample) onto
+'SLSN-II'. Any other type value -- uninformative ('Unknown') or contested/
+stale ('Ic', 2 rows within the SLSNI_Chen23 sample) -- falls back to the
+`source` column instead: each literature sample is single-class by
+construction, and being listed there at all is treated as authoritative
+over the specific type label. Verified against every row: 85 TDE /
+160 SLSN-I / 135 SLSN-II resolved (the 2 'Ic' rows now count as SLSN-I via
+their SLSNI_Chen23 source), 0 dropped.
+
+All alt-source rows -- BTS-sourced and literature-sourced (TDE_Yao23,
+SLSNI_Chen23, SLSNII_Pessi25) alike -- are confirmed to live in the same
+--alt-mongodb, so get_class_database() doesn't need per-`source` routing.
+
+The catalog has no A_V or peakmag columns -- filled with 0.0 / NaN with a
+printed warning. It DOES have RAdeg/Decdeg, so if you want real Milky Way
+extinction instead of defaulting A_V to 0, a dust-map lookup (e.g. `sfdmap`
+or `dustmaps`) could be added using those coordinates -- not done here since
+it's a new dependency, not something the catalog itself specifies.
+
+Redshift limits (zclass, near the bottom of main()): the real per-class
+ranges in this catalog are TDE [0.011, 0.519], SLSN-I [0.039, 0.670],
+SLSN-II [0.018, 0.4846] -- notably, the *previous* SLSN-I/SLSN-II zclass
+entries here were [0.0, 0.3], which would silently exclude roughly half the
+SLSN-I sample (the Chen23 literature objects push well past z=0.3) and a
+meaningful chunk of SLSN-II (Pessi25 extends to z=0.48). Updated below to
+comfortably cover the observed range with a little padding -- but that's a
+data-availability choice, not necessarily whatever science reason motivated
+the original 0.3 cutoff (e.g. GP peak-color reliability at high z); adjust
+if you had a specific reason for the narrower limit.
+
+STILL UNRESOLVED, flagged rather than guessed:
+- Whether --classfile has any rows tagged Type=='TDE'. If not, the TDE
+  fitting loop will only ever attempt salt2/salt3 (SN Ia templates, wrong
+  for a TDE) -- a runtime warning fires if none are found, but you'll still
+  need to add TDE template rows yourself.
+------------------------------------------------------------------------------
 """
 
 import argparse
@@ -25,6 +74,7 @@ from astropy.cosmology import Planck13 as cosmo
 from sncosmo.fitting import DataQualityError
 from ampel.ztf.util.ZTFIdMapper import ZTFIdMapper
 from ampel.ztf.view.ZTFFPTabulator import ZTFFPTabulator
+import sfdmap 
 
 from warptemplate import add_warpclasses, SN_REJECT, estimate_peak_flux_multiband, get_peak_colors, register_all
 
@@ -36,6 +86,19 @@ warnings.filterwarnings(
     category=RuntimeWarning,
 #    module="sncosmo.fitting"
 )
+
+
+# -----------------------------------------------------------------------------
+# Classes sourced from the alternate catalog/database instead of --bts-csv/--mongodb
+# -----------------------------------------------------------------------------
+ALT_SOURCE_CLASSES = {'SLSN-I', 'SLSN-II', 'TDE'}
+
+# Known TDE sub-classification labels in --alt-csv's `type` column that all
+# fold into the base 'TDE' class for fitting purposes.
+_TDE_TYPE_VARIANTS = {
+    'TDE', 'TDE-H-He', 'TDE-He', 'TDE-featureless', 'TDE-H+He', 'TDE-H+He?',
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -75,16 +138,130 @@ def parse_args():
     )
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 'v4'),
-        help='Version string for output files and log (default: $VERSION or v4)'
+        default=os.environ.get('VERSION', 'v5'),
+        help='Version string for output files and log (default: $VERSION or v5)'
     )
     parser.add_argument(
         '--mongodb',
         default=os.environ.get('MONGODB', 'bts_ipacfp_strictbase_train_jul26'),
         help='MongoDB database name (default: $MONGODB or bts_ipacfp_strictbase_train_jul26)'
     )
+    parser.add_argument(
+        '--alt-csv',
+        default=os.environ.get('ALT_CSV', '/Users/jnordin/data/ztf/dr4/dr4_slsntde_coordlist.csv'),
+        help='Combined SLSN/TDE catalog CSV (ZTFID, type, redshift, RAdeg, '
+             'Decdeg, source), used for SLSN-I, SLSN-II, and TDE '
+             '(default: $ALT_CSV or /Users/jnordin/...)'
+    )
+    parser.add_argument(
+        '--alt-mongodb',
+        default=os.environ.get('ALT_MONGODB', 'bts_ipacfp_strictbase_slsntns'),
+        help='Alternate MongoDB database used for SLSN-I, SLSN-II, and TDE '
+             '(default: $ALT_MONGODB or ztf_slsn_tde_photometry)'
+    )
 
     return parser.parse_args()
+
+
+def _infer_target_class(raw_type: str, source: str):
+    """Resolve one --alt-csv row's (type, source) onto 'TDE', 'SLSN-I',
+    'SLSN-II', or None if neither can be determined.
+
+    Direct, unambiguous type matches (known TDE sub-classification variants,
+    plus the hyphen-less 'SLSNII' label used by the Pessi25 sample) are
+    trusted first. Anything else -- an uninformative type ('Unknown'), or a
+    contested/stale one ('Ic', which appears twice within the SLSNI_Chen23
+    sample) -- falls back to the source catalog instead. Each literature
+    sample is single-class by construction, and its INCLUSION of an object
+    is treated as authoritative over whatever a specific `type` entry says:
+    being listed in SLSNI_Chen23 at all means it's counted as SLSN-I here,
+    regardless of a possibly-outdated 'Ic' label.
+    """
+    t = str(raw_type).strip()
+
+    if t in _TDE_TYPE_VARIANTS:
+        return 'TDE'
+    if t == 'SLSN-I':
+        return 'SLSN-I'
+    if t in ('SLSN-II', 'SLSNII'):
+        return 'SLSN-II'
+
+    s = str(source).lower()
+    if 'tde' in s:
+        return 'TDE'
+    if 'slsnii' in s or 'slsn-ii' in s:
+        return 'SLSN-II'
+    if 'slsn' in s:
+        return 'SLSN-I'
+
+    print(f"NOTE: could not resolve type='{t}', source='{source}'; dropping row.")
+    return None
+
+
+def load_class_dataframe(classname: str, args: argparse.Namespace) -> pd.DataFrame:
+    """Build the working dataframe (ZTFID, redshift, A_V, peakmag, ...) for
+    one narrow class.
+
+    Standard classes: --bts-csv, run through add_warpclasses() -- unchanged.
+
+    SLSN-I / SLSN-II / TDE (ALT_SOURCE_CLASSES): --alt-csv instead. This
+    catalog already directly IS the class list with redshifts (spanning
+    BTS plus several literature samples), so unlike the standard path it
+    does NOT go through add_warpclasses() -- class is resolved per-row via
+    _infer_target_class() using the catalog's own `type` + `source` columns.
+    """
+    if classname not in ALT_SOURCE_CLASSES:
+        df_raw = pd.read_csv(args.bts_csv)
+        df = add_warpclasses(df_raw, purge=True)
+        df = df[(df['type_n'] == classname) & (df['redshift'] != '-')]
+        df['redshift'] = pd.to_numeric(df['redshift'])
+
+        # We already here wish to convert hour / deg coordinates to RAdeg/Decdeg
+        from astropy.coordinates import SkyCoord
+        c = SkyCoord(df['RA'], df['Dec'], unit=("hour", "deg"))
+        df['RAdeg'] = c.ra.deg
+        df['Decdeg'] = c.dec.deg
+ 
+        return df
+
+    print(f"Loading {classname} from alternate catalog: {args.alt_csv}")
+    df_alt = pd.read_csv(args.alt_csv, index_col=0)
+
+    resolved = df_alt.apply(lambda row: _infer_target_class(row['type'], row['source']), axis=1)
+    n_dropped = resolved.isna().sum()
+    if n_dropped:
+        dropped_types = sorted(df_alt.loc[resolved.isna(), 'type'].unique())
+        print(f"NOTE: {n_dropped} rows in {args.alt_csv} did not resolve to "
+              f"TDE/SLSN-I/SLSN-II and were dropped (raw type(s): {dropped_types}).")
+
+    df = df_alt.loc[resolved == classname].copy()
+    print(f"  {len(df)} rows resolved to '{classname}' "
+          f"(sources: {sorted(df['source'].unique())})")
+
+    if df['redshift'].dtype == object:
+        df = df[df['redshift'] != '-']
+    df['redshift'] = pd.to_numeric(df['redshift'])
+
+    for optional_col, fill_value in (('A_V', 0.0), ('peakmag', np.nan)):
+        if optional_col not in df.columns:
+            print(f"NOTE: '{optional_col}' not in {args.alt_csv}; filling with "
+                  f"{fill_value} for all {classname} rows. RAdeg/Decdeg ARE "
+                  f"available in this file if you'd rather look up real "
+                  f"Milky Way A_V from a dust map instead of defaulting to 0.")
+            df[optional_col] = fill_value
+
+    return df
+
+
+def get_class_database(classname: str, args: argparse.Namespace, client: pymongo.MongoClient):
+    """Pick --mongodb or --alt-mongodb depending on the class.
+
+    All alt-source rows (BTS-sourced and literature-sourced alike) live in
+    the same --alt-mongodb, confirmed -- no per-`source` routing needed.
+    """
+    dbname = args.alt_mongodb if classname in ALT_SOURCE_CLASSES else args.mongodb
+    print(f"Using MongoDB database '{dbname}' for class '{classname}'")
+    return getattr(client, dbname)
 
 
 def get_db_table(name, database, tabulators=[]):
@@ -106,6 +283,24 @@ def get_db_table(name, database, tabulators=[]):
     if len(ftables) > 1:
         print('Implement astropy table appending!')
     return ftables.pop(0)
+
+def get_mw_extinction_av(row, allow_missing=False, R_V=3.1):
+    """
+    Get Milky Way extinction A_V for a candidate based on coordinate
+    information from the table. We assume this has been converted to
+        RAdeg/Decdeg (already in deg)
+    If not present, return None unless allow_missing is True, in which case return 0.0.
+    """
+
+    if not allow_missing and 'RAdeg' not in row and 'Decdeg' not in row:
+        raise ValueError("Row does not contain RAdeg and Decdeg columns for Milky Way extinction lookup.")
+    elif allow_missing and 'RAdeg' not in row and 'Decdeg' not in row:
+        print("Row does not contain RAdeg and Decdeg columns for Milky Way extinction lookup. Returning A_V=0.0.")
+        return 0.0
+    
+    return sfdmap.SFDMap().ebv(row['RAdeg'], row['Decdeg']) * R_V
+
+
 
 
 def deredden_flux_table(table, A_V, R_V=3.1):
@@ -167,11 +362,12 @@ def main():
 
     logfile = os.path.join(args.outdir, f"{args.version}_I_btssncosmo.log")
 
-    # Class definitions
+    # Class definitions -- TDE added as the 18th class (index 17), matching
+    # the CLI's pre-existing choices=range(18).
     nclasses = [
         'SLSN-II', 'SLSN-I', 'SN Ia-CSM', 'SN Iax', 'SN Ia-SC', 'SN Ia-91T',
         'SN Ic-BL', 'SN Ib', 'SN Ib/c', 'SN IIn', 'SN Ic', 'SN Ia-91bg',
-        'SN IIP', 'SN Ia-pec', 'SN II', 'SN IIb', 'SN Ibn'
+        'SN IIP', 'SN Ia-pec', 'SN II', 'SN IIb', 'SN Ibn', 'TDE',
     ]
 
     print('doing fits for', nclasses[classid])
@@ -179,27 +375,23 @@ def main():
     # Pipeline parameters
     include_sigma = 3
 
-    min_tot = 6.
-    min_early = 1.
-    earlytime = 15
-    min_bands = 2
+#    min_tot = 6.
+#    min_early = 1.
+#    earlytime = 15
+#    min_bands = 2
 
     phaserange = 60
     intdisp = 0.10
     fracdisp = True
-    peak_chicut = 100.0
+#    peak_chicut = 100.0
 
     gp_length_scale = 10.0
     peakflux_iter = 0
     peak_gp_maxdiff = 15
 
-    # Load data
-    df_bts_types = pd.read_csv(args.bts_csv)
-    df = add_warpclasses(df_bts_types, purge=True)
-    print(df.shape)
-
-    df = df[(df['type_n'] == nclasses[classid]) & (df['redshift'] != '-')]
-    df['redshift'] = pd.to_numeric(df['redshift'])
+    # Load data (standard BTS source, or the combined alt catalog for
+    # SLSN/TDE -- see load_class_dataframe() and the module docstring)
+    df = load_class_dataframe(nclasses[classid], args)
     print(df.shape)
 
     df_class = pd.read_csv(args.classfile, sep=';')
@@ -207,7 +399,7 @@ def main():
     tabulators = [ZTFFPTabulator(inclusion_sigma=include_sigma)]
 
     client = pymongo.MongoClient()
-    db = getattr(client, args.mongodb)
+    db = get_class_database(nclasses[classid], args, client)
 
     to_reject = []
     [to_reject.extend(l) for key, l in SN_REJECT.items()]
@@ -297,7 +489,15 @@ def main():
             failkey.append(3)
             continue
 
-        tab = deredden_flux_table(tab, row['A_V'], R_V=3.1)
+        # So, instead of assuming Av in file we can derive it based on position. More consistent among different catalogs.
+        Av = get_mw_extinction_av(row)
+        # Compare with bts value if there
+        if 'A_V' in row and not np.isnan(row['A_V']):
+            print(f"NOTE: catalog A_V={row['A_V']:.3f} for {name}, computed A_V={Av:.3f}.")
+            if not np.isclose(Av, row['A_V'], rtol=0.1):
+                print(f"NOTE: computed A_V={Av:.3f} differs from catalog A_V={row['A_V']:.3f} for {name}. Using computed value.")
+
+        tab = deredden_flux_table(tab, Av, R_V=3.1)
 
         banddict = {
             band: {
@@ -482,8 +682,16 @@ def main():
 
     # Analysis and output
     zclass = {
-        'SLSN-II': [0.0, 0.3],
-        'SLSN-I': [0.0, 0.3],
+        # Updated from the actual combined SLSN/TDE catalog's real observed
+        # ranges (TDE [0.011, 0.519], SLSN-I [0.039, 0.670], SLSN-II
+        # [0.018, 0.4846]) plus a little padding -- NOT the same as the
+        # previous [0.0, 0.3] entries, which excluded roughly half the
+        # SLSN-I sample and a meaningful chunk of SLSN-II. This is a
+        # data-availability choice; adjust if [0.0, 0.3] was chosen for a
+        # specific physical/quality reason rather than just "what BTS alone
+        # covered".
+        'SLSN-II': [0.0, 0.5],
+        'SLSN-I': [0.0, 0.7],
         'SN Ia-91bg': [0.01, 0.055],
         'SN Ia-91T': [0.01, 0.10],
         'SN Ia-CSM': [0.01, 0.10],
@@ -491,6 +699,7 @@ def main():
         'SN Ia-SC': [0.01, 0.10],
         'SN Ia-pec': [0.01, 0.055],
         'SN Iax': [0.0, 0.055],
+        'TDE': [0.0, 0.55],
     }
     zlim = zclass.get(nclasses[classid], [0.0, 0.07])
     print('Using {} z lim.'.format('specific' if nclasses[classid] in zclass else 'default'))

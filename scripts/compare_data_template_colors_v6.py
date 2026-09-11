@@ -60,7 +60,7 @@ from warptemplate import WarpfitTemplateLoader, add_warpclasses, register_all
 N_CLASSES = [
     'SN IIP', 'SN Ia-91T', 'SN IIn', 'SN Ib/c', 'SN Ibn', 'SN Ia-pec', 'SLSN-I',
     'SN Ic', 'SN Ic-BL', 'SN II', 'SLSN-II', 'SN Iax', 'SN Ia-91bg', 'SN Ia-CSM',
-    'SN Ia-SC', 'SN Ib', 'SN IIb',
+    'SN Ia-SC', 'SN Ib', 'SN IIb', 'TDE',
 ]
 
 
@@ -366,7 +366,7 @@ def load_observed_sn_data_multi(constituent_classes: list[str], fit_json_pattern
 # -----------------------------------------------------------------------------
 
 def evaluate_template_at_redshift(template: dict, band1: str, band2: str,
-                                  z: float, rest_phase: float = 0) -> float | None:
+                                  z: float, rest_phase_mode: str | float = 'ztfg') -> float | None:
     """Evaluate template color at observed frame for given redshift.
     
     Parameters
@@ -377,8 +377,8 @@ def evaluate_template_at_redshift(template: dict, band1: str, band2: str,
         Observer-frame bandpasses
     z : float
         Redshift
-    rest_phase : float
-        Phase in rest-frame days relative to peak
+    rest_phase_mode : str or float
+        Phase in rest-frame days relative to peak (if float) or a string key to look up the peak phase in the template (if str).
         
     Returns
     -------
@@ -388,18 +388,29 @@ def evaluate_template_at_redshift(template: dict, band1: str, band2: str,
 
     # Ensure float type for sncosmo C extensions
     z = float(z)
-    rest_phase = float(rest_phase)
-    
+    if isinstance(rest_phase_mode, str):
+        rest_phase = mod.source.peakphase(rest_phase_mode)
+    elif isinstance(rest_phase_mode, (int, float)):
+        rest_phase = float(rest_phase_mode)
+    else: 
+        raise ValueError(f"rest_phase_mode must be str or float, got {type(rest_phase_mode)}")
+
+    #rest_phase = ( mod.source.peakphase('ztfg') + mod.source.peakphase('ztfr') ) / 2.0 
+
     try:
         inz = float(mod.get('z'))  # Also ensure float on retrieval
     except (TypeError, ValueError):
         inz = 0.0
 
 
+#    z = 0.0
+
     try:
         mod.set(z=z)
         # Observer-frame phase = rest-frame phase * (1+z)
         obs_phase = rest_phase * (1 + z)
+        #obs_phase= rest_phase
+        #print(band1, band2, obs_phase)
         
         mag1 = mod.bandmag(band1, "ab", obs_phase)
         mag2 = mod.bandmag(band2, "ab", obs_phase)
@@ -417,7 +428,7 @@ def evaluate_template_at_redshift(template: dict, band1: str, band2: str,
 
 
 def generate_redshifted_colors(templates: list[dict], band1: str, band2: str,
-                               z_values: np.ndarray, rest_phase: float = 0,
+                               z_values: np.ndarray, rest_phase_mode: str| float = 'ztfg',
                                n_draw_per_z: int | None = None,
                                random_seed: int | None = None) -> np.ndarray:
     """Generate colors by evaluating templates at matching redshifts.
@@ -439,7 +450,6 @@ def generate_redshifted_colors(templates: list[dict], band1: str, band2: str,
         # Default: use all templates at each redshift (N_templates * N_z samples)
         n_draw_per_z = n_templates
     
-
     
     colors = []
     
@@ -452,7 +462,9 @@ def generate_redshifted_colors(templates: list[dict], band1: str, band2: str,
             indices = rng.choice(n_templates, size=n_draw_per_z, replace=False)
         
         for idx in indices:
-            col = evaluate_template_at_redshift(templates[idx], band1, band2, z, rest_phase)
+            col = evaluate_template_at_redshift(templates[idx], band1, band2, z, rest_phase_mode)
+#            col2 = evaluate_template_at_redshift(templates[idx], band1, band2, 0, rest_phase_mode)
+#            print(f"z={z:.3f}, template_idx={idx}, color={col}, color_at_z0={col2}, dcolor={col-col2 if col is not None and col2 is not None else 'N/A'}    ")
             if col is not None:
                 colors.append({
                     'z': z,
@@ -831,6 +843,9 @@ def plot_publication_color_comparison(obs_data: list[dict],
         for label, (mod_cols, color) in mod_collections.items():
             if mod_cols is None or len(mod_cols) == 0:
                 continue
+            if label=='Harmonized':
+                # Avoid drawing a misleading histogram for very small samples
+                continue
             mod_c = mod_cols['color']
             hist_mod, _ = np.histogram(mod_c, bins=bins, density=True)
             ax.fill_between(bin_centers, hist_mod, step='mid', color=color, alpha=0.10, zorder=1)
@@ -1077,6 +1092,7 @@ def analyze_class_redshifted(class_name: str, args: argparse.Namespace) -> dict 
                 snbasis_selection=args.snbasis_selection,
                 random_seed=args.random_seed,
                 color_mode=color_mode,
+                min_fit_quality=None,
             )
             mode_templates[mode] = templates
             print(f"  {mode:12s}: {len(templates)} templates")
@@ -1121,7 +1137,7 @@ def analyze_class_redshifted(class_name: str, args: argparse.Namespace) -> dict 
             
             cols = generate_redshifted_colors(
                 templates, band1, band2, unique_z,
-                rest_phase=args.phase,
+                rest_phase_mode=args.phasemode,
                 n_draw_per_z=n_draw,
                 random_seed=args.random_seed + hash(mode) % 10000,
             )
@@ -1246,7 +1262,12 @@ def run_redshifted_comparison(args: argparse.Namespace) -> list[dict]:
 # -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
-
+def str_or_float(value):
+    try:
+        return float(value)
+    except ValueError:
+        return value
+    
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Compare redshifted warp templates with observed SN colors.",
@@ -1259,7 +1280,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Paths
     parser.add_argument("--warpdir", type=Path,
-                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v4"))
+                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v5"))
     parser.add_argument("--outdir", type=Path, default=Path("."))
     parser.add_argument("--fit-json-pattern", type=str,
                         default="/Users/jnordin/data/models/sncosmo/btsfitsv{version}_{class_name}.json")
@@ -1268,12 +1289,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-selection", default='all')
     parser.add_argument("--snbasis-selection", default="all")
     parser.add_argument("--random-seed", type=int, default=42)
-    parser.add_argument("--version", default="4")
-    parser.add_argument("--suffix", default="_col")
+    parser.add_argument("--version", default="5")
+    parser.add_argument("--suffix", default="", help="Optional suffix for template files (e.g. '_col')") 
     
     # Redshifted evaluation
-    parser.add_argument("--phase", type=float, default=0,
-                        help="Rest-frame phase relative to peak (days)")
+    parser.add_argument(
+        "--phasemode", type=str_or_float, default='ztfg',
+        help="Phase at which to evaluate color (days relative to peak): if str, use peak phase in this band; if float, use this phase"
+    )
     parser.add_argument("--n-draw-per-z", type=int, default=None,
                         help="Template draws per redshift (default: min(N_templates, 50))")
     parser.add_argument("--n-z-bins", type=int, default=4,

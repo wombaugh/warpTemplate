@@ -1,11 +1,50 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Warp template coefficient extraction from BTS fits.
-
-Builds on v2_I: redshift limits pre-applied, classes as in v2_0.
-Parses btsfits summary files and collects warp template coefficients
-for specified class combinations.
+Extract per-SN warp template coefficients from stage-1 sncosmo fit summaries.
+ 
+For one taxonomy class (narrow, extended, wide, or "all" -- see
+--classwidth), this script:
+ 
+  1. Loads every narrow class's per-model fit results (the
+     btsfits{version}_*.json files produced by sample_sncosmo_from_db.py)
+     that belongs under the requested class, and keeps only fits flagged
+     as a "correct" template type and a "good" chi-square/dof.
+  2. For each SN with at least one surviving fit, re-fetches its light
+     curve, dereddens it for Milky Way extinction, and fits a *warped*
+     version of each candidate template (warptemplate.get_template_correction
+     + warptemplate.get_warpedTimeSeriesModel) -- a per-object correction
+     surface letting one base template reproduce that specific SN's actual
+     color and shape evolution, not just its overall light curve.
+  3. Screens each resulting warp fit for basic physical sanity (phase
+     coverage around the fitted peak, unphysical behavior across data
+     gaps) and assigns it a gold/silver/bronze quality tier.
+  4. Collects every SN's surviving warp fits, each with a normalized draw
+     probability, into one pickle file consumed by
+     warptemplate.WarpfitTemplateLoader for later template generation.
+ 
+Data sources: standard classes read their SN list, redshifts, and
+coordinates from --bts-file (via warptemplate.add_warpclasses); SLSN-I,
+SLSN-II, and TDE instead read a combined literature-plus-BTS catalog
+(--alt-csv). Both are merged into one working dataframe up front (see
+load_combined_bts_data) so that any --classwidth/--cid selection --
+including combined classes that mix standard and alt-source narrow
+classes, such as 'SN CC (a)', which includes SLSN -- resolves consistently
+regardless of which source a given SN's data actually comes from. Milky
+Way A_V is computed the same way (via the SFD dust map, see
+get_mw_extinction_av) for every object regardless of source, so
+dereddening isn't split across two different conventions depending on
+which catalog an SN happens to be in. Photometry itself still comes from
+two separate MongoDB databases (--db-name for standard objects,
+--alt-mongodb for alt-source ones), selected per-SN rather than per-run.
+ 
+Usage:
+    python templatecreation_II_class2warpset.py --classwidth w --cid 3
+    python templatecreation_II_class2warpset.py --cw n --cid 8 --version 5
+ 
+See the accompanying extract_warp_coeffs.md for full architecture notes,
+a function-by-function reference, the output pickle schema, and known
+caveats.
 """
 
 import argparse
@@ -24,9 +63,11 @@ import pymongo
 import seaborn as sns
 import sncosmo
 from astropy.cosmology import Planck13 as cosmo
+from astropy.coordinates import SkyCoord
 from astropy.table import Table
 from iminuit.util import IMinuitWarning
 from scipy.stats.distributions import chi2
+import sfdmap
 
 
 from ampel.ztf.util.ZTFIdMapper import ZTFIdMapper
@@ -49,6 +90,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 DEFAULT_BTS_FILE = "/Users/jnordin/data/ztf/bts/bts_explorer_260601.csv"
 DEFAULT_FDIR = "/Users/jnordin/data/models/sncosmo/"
 DEFAULT_OUTDIR = "/Users/jnordin/data/models/sncosmo/warpmod/"
+DEFAULT_ALT_CSV = "/Users/jnordin/data/ztf/dr4/dr4_slsntde_coordlist.csv"
+DEFAULT_ALT_MONGODB = "bts_ipacfp_strictbase_slsntns"
 
 # Selection parameters
 MIN_BANDS = 2
@@ -75,43 +118,171 @@ MAX_PHASES = {
 }
 
 
+# ─── SLSN / TDE alternate catalog (matching the first pipeline stage) ───────
 
-# ─── Argument parsing ────────────────────────────────────────────────────────
+ALT_SOURCE_CLASSES = {'SLSN-I', 'SLSN-II', 'TDE'}
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Extract warp template coefficients")
-    parser.add_argument(
-        "--classwidth",  "--cw",
-        choices=["n", "e", "w", "a"], default="n",
-        help="Class width: (n)arrow, (e)xtended, (w)ide, (a)ll"
-    )
-    parser.add_argument(
-        "--cid",  "--classid",
-        type=int, default=11, help="Class index to process")
-    parser.add_argument(
-        '--version', '-v',
-        default=os.environ.get('VERSION', 5),
-        help='Version string for input and output files (default: $VERSION or 5)'
-    )
-    parser.add_argument(
-        "--fit-host-dust", action="store_true", default=True,
-        help="Fit host extinction when warping"
-    )
-    parser.add_argument("--no-fit-host-dust", dest="fit_host_dust", action="store_false")
-    parser.add_argument("--bts-file", default=DEFAULT_BTS_FILE)
-    parser.add_argument("--fdir", default=DEFAULT_FDIR)
-    parser.add_argument("--outdir", default=DEFAULT_OUTDIR)
-    parser.add_argument("--db-name", default="bts_ipacfp_strictbase_train_jul26")
-    return parser.parse_args()
+_TDE_TYPE_VARIANTS = {
+    'TDE', 'TDE-H-He', 'TDE-He', 'TDE-featureless', 'TDE-H+He', 'TDE-H+He?',
+}
+
+# Official narrow -> extended -> wide -> all class mapping (duplicated from
+# the analysis scripts' compare_data_template_colors_v6.py), needed to give
+# the alt-csv rows type_e/type_w/type_a without going through
+# add_warpclasses(), which doesn't know about them.
+WARP_MAP_EXTENDED = {
+    "SN Ia-91bg": "SN Ia-91bg (e)", "SN IIn": "SN IIn (e)", "SN IIb": "SN Ib/c (e)",
+    "SN Ia-CSM": "SN Ia-pec (e)", "SN Ibn": "SN Ibn (e)", "SN Ia-SC": "SN Ia-pec (e)",
+    "SN Ib": "SN Ib/c (e)", "SLSN-II": "SLSN (e)", "SN Iax": "SN Ia-pec (e)",
+    "SN Ia-91T": "SN Ia-91T (e)", "SLSN-I": "SLSN (e)", "SN Ic": "SN Ib/c (e)",
+    "SN Ia-pec": "SN Ia-pec (e)", "SN IIP": "SN II (e)", "SN Ic-BL": "SN Ib/c (e)",
+    "SN Ia": "SN Ia (e)", "SN II": "SN II (e)", "SN Ib/c": "SN Ib/c (e)",
+    "TDE": "TDE (e)",
+}
+WARP_MAP_WIDE = {
+    "SN II (e)": "SN II (w)", "SN Ib (e)": "SN Ib/c (w)", "SN Ibn (e)": "SN Ib/c (w)",
+    "SN Ia-91T (e)": "SN Ia (w)", "SLSN (e)": "SLSN (w)", "SN IIn (e)": "SLSN (w)",
+    "SN Ia-pec (e)": "SN Ia-pec (w)", "SN Ia-91bg (e)": "SN Ia-91bg (w)",
+    "SN Ic (e)": "SN Ib/c (w)", "SN Ia (e)": "SN Ia (w)", "SN Ib/c (e)": "SN Ib/c (w)",
+    "TDE (e)": "TDE (w)",
+}
+WARP_MAP_ALL = {
+    "SN Ia (w)": "SN Ia (a)", "SLSN (w)": "SN CC (a)", "SN Ib/c (w)": "SN CC (a)",
+    "SN Ia-pec (w)": "SN Ia (a)", "SN II (w)": "SN CC (a)", "SN Ia-91bg (w)": "SN Ia (a)",
+    "TDE (w)": "TDE (a)",
+}
+
+
+def _infer_target_class(raw_type: str, source: str):
+    """Resolve one alt-csv row's (type, source) onto 'TDE', 'SLSN-I',
+    'SLSN-II', or None. Direct type matches (including known TDE
+    sub-classification variants) are trusted first; anything else -- an
+    uninformative type ('Unknown') or a contested/stale one ('Ic') -- falls
+    back to `source`, which is treated as authoritative (list membership
+    wins over a specific type label). Identical to the first pipeline
+    stage's version."""
+    t = str(raw_type).strip()
+
+    if t in _TDE_TYPE_VARIANTS:
+        return 'TDE'
+    if t == 'SLSN-I':
+        return 'SLSN-I'
+    if t in ('SLSN-II', 'SLSNII'):
+        return 'SLSN-II'
+
+    s = str(source).lower()
+    if 'tde' in s:
+        return 'TDE'
+    if 'slsnii' in s or 'slsn-ii' in s:
+        return 'SLSN-II'
+    if 'slsn' in s:
+        return 'SLSN-I'
+
+    print(f"NOTE: could not resolve type='{t}', source='{source}'; dropping row.")
+    return None
+
+
+def get_mw_extinction_av(row, allow_missing=False, R_V=3.1):
+    """
+    Get Milky Way extinction A_V for a candidate based on coordinate
+    information from the table. We assume this has been converted to
+        RAdeg/Decdeg (already in deg)
+    If not present, return None unless allow_missing is True, in which case return 0.0.
+
+    Copied verbatim from the first pipeline stage so both stages use
+    exactly the same convention for every object, standard or alt-source
+    alike -- this is what replaces the old class-correlated split where
+    standard objects used BTS's own (NED-based) A_V and alt-source objects
+    defaulted to 0.0.
+    """
+    if not allow_missing and 'RAdeg' not in row and 'Decdeg' not in row:
+        raise ValueError("Row does not contain RAdeg and Decdeg columns for Milky Way extinction lookup.")
+    elif allow_missing and 'RAdeg' not in row and 'Decdeg' not in row:
+        print("Row does not contain RAdeg and Decdeg columns for Milky Way extinction lookup. Returning A_V=0.0.")
+        return 0.0
+
+    return sfdmap.SFDMap().ebv(row['RAdeg'], row['Decdeg']) * R_V
+
+
+def _load_alt_dataframe(args: argparse.Namespace) -> pd.DataFrame:
+    """Load and resolve the WHOLE SLSN/TDE catalog (all three classes at
+    once, unlike a per-class loader -- this stage needs every alt-source
+    class available up front, before it knows which narrow classes a given
+    --classwidth/--cid run will touch).
+
+    A_V/peakmag are no longer load-bearing here (see get_mw_extinction_av,
+    called uniformly in process_single_sn) -- filled with NaN if absent
+    purely so the sanity-check comparison print doesn't crash on a missing
+    column.
+    """
+    print(f"Loading SLSN/TDE catalog from alternate source: {args.alt_csv}")
+    df_alt = pd.read_csv(args.alt_csv, index_col=0)
+
+    resolved = df_alt.apply(lambda row: _infer_target_class(row['type'], row['source']), axis=1)
+    n_dropped = resolved.isna().sum()
+    if n_dropped:
+        dropped_types = sorted(df_alt.loc[resolved.isna(), 'type'].unique())
+        print(f"NOTE: {n_dropped} rows in {args.alt_csv} did not resolve to "
+              f"TDE/SLSN-I/SLSN-II and were dropped (raw type(s): {dropped_types}).")
+
+    df = df_alt.loc[resolved.notna()].copy()
+    df['type_n'] = resolved.loc[resolved.notna()]
+
+    if df['redshift'].dtype == object:
+        df = df[df['redshift'] != '-']
+    df['redshift'] = pd.to_numeric(df['redshift'])
+
+    if 'A_V' not in df.columns:
+        df['A_V'] = np.nan
+    if 'peakmag' not in df.columns:
+        df['peakmag'] = np.nan
+
+    df['type_e'] = df['type_n'].map(WARP_MAP_EXTENDED)
+    df['type_w'] = df['type_e'].map(lambda e: WARP_MAP_WIDE.get(e, e))
+    df['type_a'] = df['type_w'].map(lambda w: WARP_MAP_ALL.get(w, w))
+
+    print(f"  Resolved {len(df)} rows: {df['type_n'].value_counts().to_dict()}")
+    return df
 
 
 # ─── Data loading ────────────────────────────────────────────────────────────
 
-def load_bts_data(bts_file: str):
-    """Load BTS explorer data and add warp classes."""
-    df_bts = pd.read_csv(bts_file)
+def load_bts_data(args: argparse.Namespace) -> pd.DataFrame:
+    """Load standard BTS explorer data, add warp classes, and compute
+    RAdeg/Decdeg from RA/Dec hour/deg strings (matching the first stage)."""
+    df_bts = pd.read_csv(args.bts_file)
     df_bts = add_warpclasses(df_bts, purge=True)
+
+    c = SkyCoord(df_bts['RA'], df_bts['Dec'], unit=("hour", "deg"))
+    df_bts['RAdeg'] = c.ra.deg
+    df_bts['Decdeg'] = c.dec.deg
+
     return df_bts
+
+
+def load_combined_bts_data(args: argparse.Namespace) -> pd.DataFrame:
+    """Standard BTS data plus the SLSN/TDE alternate catalog, concatenated
+    into one dataframe covering every narrow class this pipeline knows
+    about -- so classlist/process_classes (driven by --classwidth) work
+    the same regardless of which source a narrow class's data comes from.
+    """
+    df_standard = load_bts_data(args)
+    df_alt = _load_alt_dataframe(args)
+
+    required_cols = ['ZTFID', 'redshift', 'RAdeg', 'Decdeg',
+                      'type_n', 'type_e', 'type_w', 'type_a']
+    missing_std = [c for c in required_cols if c not in df_standard.columns]
+    missing_alt = [c for c in required_cols if c not in df_alt.columns]
+    if missing_std or missing_alt:
+        raise ValueError(
+            f"Cannot combine standard/alt BTS dataframes -- missing required "
+            f"columns (standard missing: {missing_std}, alt missing: {missing_alt})"
+        )
+
+    df = pd.concat([df_standard, df_alt], ignore_index=True, sort=False)
+    print(f"Combined dataframe: {len(df_standard)} standard + {len(df_alt)} "
+          f"alt-source rows = {len(df)} total")
+    return df
 
 
 def get_process_classes(df_bts: pd.DataFrame, category: str, class_name: str):
@@ -522,7 +693,8 @@ def process_single_sn(
     id_value: str,
     group: pd.DataFrame,
     df_bts: pd.DataFrame,
-    db,
+    db_standard,
+    db_alt,
     fit_host_dust: bool,
     close_templates: list,
     template_count: int,
@@ -534,7 +706,24 @@ def process_single_sn(
     """
     Fit warped templates for single SN, returning list of successful warp fits.
     """
-    av = df_bts.loc[df_bts["ZTFID"] == id_value].iloc[0]["A_V"]
+    bts_row = df_bts.loc[df_bts["ZTFID"] == id_value].iloc[0]
+
+    # Milky Way A_V is always computed via the SFD dust map, for every
+    # object regardless of source (matching the first stage's finalized
+    # approach) -- whatever A_V the source catalog itself provides is only
+    # a sanity-check comparison, never used for the actual dereddening.
+    av = get_mw_extinction_av(bts_row)
+    if 'A_V' in bts_row and not pd.isna(bts_row['A_V']):
+        print(f"NOTE: catalog A_V={bts_row['A_V']:.3f} for {id_value}, computed A_V={av:.3f}.")
+        if not np.isclose(av, bts_row['A_V'], rtol=0.1):
+            print(f"NOTE: computed A_V={av:.3f} differs from catalog A_V={bts_row['A_V']:.3f} "
+                  f"for {id_value}. Using computed value.")
+
+    # A single --classwidth/--cid run can mix standard and alt-source narrow
+    # classes (e.g. 'SN CC (a)' includes SLSN per WARP_MAP_ALL), so which
+    # database to query is decided per-SN here, from the same row already
+    # used for A_V, rather than once for the whole run.
+    db = db_alt if bts_row["type_n"] in ALT_SOURCE_CLASSES else db_standard
 
     # Priority: correct+good > correct > rest, then by chidof
     ordered = (
@@ -592,14 +781,19 @@ def process_single_sn(
         )
 
         # Build and fit warped model
-        wm = get_warpedTimeSeriesModel(
-            name=f"{row['id']}_{row['model']}",
-            original_template_name=row["model"],
-            warpdata=mdict,
-            z=float(row["z"]),
-            use_host_dust=False,      # Also when fitting with dust above, this should have been absorbed into the warp correction
-            original_template_version=None,
-        )
+        try:
+            wm = get_warpedTimeSeriesModel(
+                name=f"{row['id']}_{row['model']}",
+                original_template_name=row["model"],
+                warpdata=mdict,
+                z=float(row["z"]),
+                use_host_dust=False,      # Also when fitting with dust above, this should have been absorbed into the warp correction
+                original_template_version=None,
+            )
+        except ValueError as e:
+            print(f"Failed to create warped model for {row['id']} with {row['model']}: {e}")
+            print('... skipping and continuing')
+            continue
         if wm is None:
             print(f"Failed to create warped model for {row['id']} with {row['model']}")
             continue
@@ -664,13 +858,20 @@ def process_single_sn(
             fout = os.path.join('/Users/jnordin/tmp/wmod/good',plotname)
 
         # Finish the plot
-        fig = sncosmo.plot_lc(tab, model=wfitted_model, errors=wresult.errors)
-        for ax in fig.axes:
-            ax.axvline(x=mdict['warpfit_tmin']-t0, color='red', linestyle='--', alpha=0.7, label='peak')
-            # or multiple lines
-            ax.axvline(x=mdict['warpfit_tmax']-t0, color='blue', linestyle=':', alpha=0.5)
-        plt.savefig(fout)
-        plt.close()
+        try:
+            fig = sncosmo.plot_lc(tab, model=wfitted_model, errors=wresult.errors)
+            for ax in fig.axes:
+                ax.axvline(x=mdict['warpfit_tmin']-t0, color='red', linestyle='--', alpha=0.7, label='peak')
+                # or multiple lines
+                ax.axvline(x=mdict['warpfit_tmax']-t0, color='blue', linestyle=':', alpha=0.5)
+            plt.savefig(fout)
+            plt.close()
+        except:
+            print('XXXX ... failed to make plot', fout)
+            print('... tab', tab)
+            print('... wfitted_model', wfitted_model)
+            print('... wresult', wresult)
+            raise ValueError('Failed to make plot')
 
         if fiteval in ['poor', 'var']:
             print('... reject fit', fiteval, row["sf"], wresult["chisq"] / wresult["ndof"])
@@ -713,11 +914,51 @@ def process_single_sn(
     return sn_warplist
 
 
+# ─── Argument parsing ────────────────────────────────────────────────────────
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract warp template coefficients")
+    parser.add_argument(
+        "--classwidth",  "--cw",
+        choices=["n", "e", "w", "a"], default="n",
+        help="Class width: (n)arrow, (e)xtended, (w)ide, (a)ll"
+    )
+    parser.add_argument(
+        "--cid",  "--classid",
+        type=int, default=11, help="Class index to process")
+    parser.add_argument(
+        '--version', '-v',
+        default=os.environ.get('VERSION', 5),
+        help='Version string for input and output files (default: $VERSION or 5)'
+    )
+    parser.add_argument(
+        "--fit-host-dust", action="store_true", default=True,
+        help="Fit host extinction when warping"
+    )
+    parser.add_argument("--no-fit-host-dust", dest="fit_host_dust", action="store_false")
+    parser.add_argument("--bts-file", default=DEFAULT_BTS_FILE)
+    parser.add_argument("--fdir", default=DEFAULT_FDIR)
+    parser.add_argument("--outdir", default=DEFAULT_OUTDIR)
+    parser.add_argument("--db-name", default="bts_ipacfp_strictbase_train_jul26")
+    parser.add_argument(
+        "--alt-csv", default=os.environ.get('ALT_CSV', DEFAULT_ALT_CSV),
+        help="Combined SLSN/TDE catalog CSV (ZTFID, type, redshift, RAdeg, "
+             "Decdeg, source), same file the first pipeline stage uses"
+    )
+    parser.add_argument(
+        "--alt-mongodb", default=os.environ.get('ALT_MONGODB', DEFAULT_ALT_MONGODB),
+        help="MongoDB database for SLSN-I, SLSN-II, and TDE photometry"
+    )
+    return parser.parse_args()
+
+
 def main():
     args = parse_args()
 
-    # Load data
-    df_bts = load_bts_data(args.bts_file)
+    # Load data -- standard BTS file plus the SLSN/TDE alternate catalog,
+    # combined into one dataframe covering every narrow class (see
+    # load_combined_bts_data() and the module docstring).
+    df_bts = load_combined_bts_data(args)
     classlist = df_bts[f"type_{args.classwidth}"].unique()
     print('Available classes:', classlist   )
     
@@ -784,9 +1025,11 @@ def main():
     nbr_sn = len( dfall["id"].unique() )
     print(f"Unique SN IDs: {nbr_sn}")
 
-    # Database connection
+    # Database connections -- standard and alt-source SLSN/TDE photometry
+    # live in different databases; process_single_sn() picks per-SN.
     client = pymongo.MongoClient()
-    db = getattr(client, args.db_name)
+    db_standard = getattr(client, args.db_name)
+    db_alt = getattr(client, args.alt_mongodb)
 
     # Main warp fitting loop
     full_warplist = {}
@@ -797,7 +1040,8 @@ def main():
             id_value=id_value,
             group=group,
             df_bts=df_bts,
-            db=db,
+            db_standard=db_standard,
+            db_alt=db_alt,
             fit_host_dust=args.fit_host_dust,
             close_templates=close_templates,
             max_phases=args.max_phases if hasattr(args, 'max_phases') else None,
