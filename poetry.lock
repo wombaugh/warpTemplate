@@ -2346,6 +2346,21 @@ docs = ["ipykernel", "nbconvert", "numpydoc", "pydata_sphinx_theme (==0.10.0rc2)
 stats = ["scipy (>=1.7)", "statsmodels (>=0.12)"]
 
 [[package]]
+name = "sfdmap"
+version = "0.1.1"
+description = "Get E(B-V) values from Schlegel et al (1998) dust maps"
+optional = false
+python-versions = "*"
+groups = ["main"]
+markers = "sys_platform == \"win32\" or sys_platform == \"emscripten\" or sys_platform != \"win32\" and sys_platform != \"emscripten\""
+files = [
+    {file = "sfdmap-0.1.1.tar.gz", hash = "sha256:12d9d03ab5f32a70ce363543fae53b568ae457dfcd8e6045f7ab5142a59a06a2"},
+]
+
+[package.dependencies]
+numpy = "*"
+
+[[package]]
 name = "six"
 version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
@@ -2805,4 +2820,4 @@ dev = ["black", "pytest"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "c99f55861113866715e87a8a55936702d3b6eb0ada276fc9013247fc1d70c99b"
+content-hash = "c55f279b0fc8dab9144d93cd7996167bfd0a963eed7b371fdf584f0231af22a0"
