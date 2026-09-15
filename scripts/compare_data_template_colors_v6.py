@@ -403,8 +403,6 @@ def evaluate_template_at_redshift(template: dict, band1: str, band2: str,
         inz = 0.0
 
 
-#    z = 0.0
-
     try:
         mod.set(z=z)
         # Observer-frame phase = rest-frame phase * (1+z)
@@ -773,7 +771,7 @@ def _publication_rcparams() -> dict:
     }
 
 
-def plot_publication_color_comparison(obs_data: list[dict],
+def old_plot_publication_color_comparison(obs_data: list[dict],
                                       raw_model_colors: np.ndarray | None,
                                       harm_model_colors: np.ndarray | None,
                                       draw_model_colors: np.ndarray | None,
@@ -843,9 +841,8 @@ def plot_publication_color_comparison(obs_data: list[dict],
         for label, (mod_cols, color) in mod_collections.items():
             if mod_cols is None or len(mod_cols) == 0:
                 continue
-            if label=='Harmonized':
-                # Avoid drawing a misleading histogram for very small samples
-                continue
+#            if label=='Harmonized':
+#                continue
             mod_c = mod_cols['color']
             hist_mod, _ = np.histogram(mod_c, bins=bins, density=True)
             ax.fill_between(bin_centers, hist_mod, step='mid', color=color, alpha=0.10, zorder=1)
@@ -853,6 +850,111 @@ def plot_publication_color_comparison(obs_data: list[dict],
                     label=f'{label} (N={len(mod_c)})', zorder=5)
             kde_mod = gaussian_kde(mod_c, bw_method='scott')
             ax.plot(x_grid, kde_mod(x_grid), color=color, lw=1.3, ls='--', alpha=0.9, zorder=5)
+
+        ax.set_xlabel(f'{color_key} (mag)')
+        ax.set_ylabel('Probability density')
+        ax.set_xlim(bins[0], bins[-1])
+        ax.set_ylim(bottom=0)
+        ax.set_title(class_name, loc='left', style='italic')
+
+        ax.legend(loc='upper right', handlelength=1.6, borderaxespad=0.4)
+
+        fig.tight_layout()
+
+        safe_name = class_name.replace('/', '')
+        safe_color = color_key.replace('/', '-')
+        outpath_pdf = outdir / f"pub_hist_{safe_name}_{safe_color}.pdf"
+        outpath_png = outdir / f"pub_hist_{safe_name}_{safe_color}.png"
+        fig.savefig(outpath_pdf, bbox_inches='tight')
+        fig.savefig(outpath_png, bbox_inches='tight', dpi=300)
+        plt.close(fig)
+
+    return outpath_pdf
+
+def plot_publication_color_comparison(obs_data: list[dict],
+                                      raw_model_colors: np.ndarray | None,
+                                      harm_model_colors: np.ndarray | None,
+                                      draw_model_colors: np.ndarray | None,
+                                      color_key: str, class_name: str,
+                                      outdir: Path,
+                                      include_modes: tuple[str, ...] = ('Raw', 'Harmonized', 'Randomized'),
+                                      figsize: tuple[float, float] = (5.5, 4.2),
+                                      range_percentiles: tuple[float, float] = (1, 99)) -> Path:
+    """Clean, single-panel, publication-quality color-distribution plot.
+
+    [docstring unchanged]
+    """
+    obs_color = np.array([s['colors'].get(color_key, np.nan) for s in obs_data])
+    obs_color = obs_color[np.isfinite(obs_color)]
+
+    all_mod_collections = {
+        'Raw': (raw_model_colors, '#4C72B0'),
+        'Harmonized': (harm_model_colors, '#55A868'),
+        'Randomized': (draw_model_colors, '#C44E52'),
+    }
+    mod_collections = {k: all_mod_collections[k] for k in include_modes if k in all_mod_collections}
+
+    # --- 1. clip to [-4, 4] ---
+    obs_color = obs_color[(obs_color >= -4) & (obs_color <= 4)]
+    for label, (mod_cols, _) in mod_collections.items():
+        if mod_cols is not None and len(mod_cols) > 0:
+            mask = (mod_cols['color'] >= -4) & (mod_cols['color'] <= 4)
+            mod_collections[label] = (mod_cols[mask], all_mod_collections[label][1])
+
+    # --- 2. compute global y-max from non-Harmonized distributions ---
+    #    (build histograms with shared bins to get comparable peak heights)
+    distributions = [obs_color]
+    for label, (mod_cols, _) in mod_collections.items():
+        if label != 'Harmonized' and mod_cols is not None and len(mod_cols) > 0:
+            distributions.append(mod_cols['color'])
+
+    bounds = [np.percentile(d, range_percentiles) for d in distributions]
+    c_lo = max(min(b[0] for b in bounds), -4)   # enforce hard limit
+    c_hi = min(max(b[1] for b in bounds), 4)
+    c_pad = 0.06 * (c_hi - c_lo)
+    bins = np.linspace(c_lo - c_pad, c_hi + c_pad, 40)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+    x_grid = np.linspace(bins[0], bins[-1], 400)
+
+    # peak density among non-Harmonized
+    y_max = 0
+    for d in distributions:
+        hist, _ = np.histogram(d, bins=bins, density=True)
+        y_max = max(y_max, hist.max() if len(hist) else 0)
+
+    from scipy.stats import gaussian_kde
+
+    with plt.rc_context(_publication_rcparams()):
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Observed: reference distribution, drawn darkest and on top
+        hist_obs, _ = np.histogram(obs_color, bins=bins, density=True)
+        ax.fill_between(bin_centers, hist_obs, step='mid', color='0.15', alpha=0.12, zorder=2)
+        ax.step(bin_centers, hist_obs, where='mid', color='0.15', lw=1.8,
+                label=f'Observed (N={len(obs_color)})', zorder=6)
+        kde_obs = gaussian_kde(obs_color, bw_method='scott')
+        ax.plot(x_grid, kde_obs(x_grid), color='0.15', lw=1.3, alpha=0.9, zorder=6)
+
+        for label, (mod_cols, color) in mod_collections.items():
+            if mod_cols is None or len(mod_cols) == 0:
+                continue
+            mod_c = mod_cols['color']
+            hist_mod, _ = np.histogram(mod_c, bins=bins, density=True)
+
+            # --- 3. rescale Harmonized to match peak of others ---
+            if label == 'Harmonized' and y_max > 0 and hist_mod.max() > 0:
+                scale = y_max / hist_mod.max()
+                hist_mod = hist_mod * scale
+                kde_mod = gaussian_kde(mod_c, bw_method='scott')
+                kde_y = kde_mod(x_grid) * scale
+            else:
+                kde_mod = gaussian_kde(mod_c, bw_method='scott')
+                kde_y = kde_mod(x_grid)
+
+            ax.fill_between(bin_centers, hist_mod, step='mid', color=color, alpha=0.10, zorder=1)
+            ax.step(bin_centers, hist_mod, where='mid', color=color, lw=1.8,
+                    label=f'{label} (N={len(mod_c)})', zorder=5)
+            ax.plot(x_grid, kde_y, color=color, lw=1.3, ls='--', alpha=0.9, zorder=5)
 
         ax.set_xlabel(f'{color_key} (mag)')
         ax.set_ylabel('Probability density')

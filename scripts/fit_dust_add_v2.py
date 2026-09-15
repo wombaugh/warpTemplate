@@ -78,6 +78,20 @@ slow, and the delta_c initial guess should be blue-biased)
    (transmission-weighted mean wavelength), which works for any band
    sncosmo knows about rather than a hand-picked list.
 ------------------------------------------------------------------------------
+v3 changes
+------------------------------------------------------------------------------
+5. PERSIST delta_c / av_scale TO THE WARP TEMPLATE PKL FILES.
+   Previously this script only wrote a summary CSV and diagnostic/publication
+   plots -- the per-color fit results never made it back into the template
+   store, so any downstream code that loads templates via
+   WarpfitTemplateLoader had no way to pick them up. Now, after fitting all
+   colors for a class, the per-color results are collected into a
+   'offset_extinction_corr' block and written into that class's model-color
+   metadata via the same WarpfitTemplateLoader.update_model_colors() /
+   save_class() API used by the upstream Johnson-SU/linear-correction script,
+   so the pkl becomes the single source of truth for both sets of
+   corrections. This can be disabled with --no-save-pkl.
+------------------------------------------------------------------------------
 """
 
 import argparse
@@ -286,12 +300,12 @@ def _coarse_grid_search(obj_fn, delta_c_bounds, av_scale_bounds, n_grid,
 
 def fit_offset_extinction(obs_data: list[dict], templates: list[dict],
                           color_key: str, z_values: np.ndarray,
-                          rest_phase: float = 0,
+                          rest_phase_mode: str = 'ztfg',
                           n_draw_per_z: int | None = None,
                           random_seed: int = 42,
                           av_dist: str = 'exponential',
                           delta_c_bounds: tuple[float, float] = (-1.0, 1.0),
-                          av_scale_bounds: tuple[float, float] = (0.0, 1.0),
+                          av_scale_bounds: tuple[float, float] = (0.0, 2.0),
                           n_grid: int = 25,
                           verbose: bool = False) -> tuple[FitResult, FitContext] | tuple[None, None]:
     """Fit delta_c and the A_V-distribution scale to minimize KS distance
@@ -320,7 +334,7 @@ def fit_offset_extinction(obs_data: list[dict], templates: list[dict],
     # The ONE sncosmo-touching step for this whole fit.
     intrinsic = generate_redshifted_colors(
         templates, band1, band2, z_values,
-        rest_phase=rest_phase, n_draw_per_z=n_draw_per_z, random_seed=random_seed,
+        rest_phase_mode=rest_phase_mode, n_draw_per_z=n_draw_per_z, random_seed=random_seed,
     )
     if len(intrinsic) == 0:
         return None, None
@@ -474,9 +488,10 @@ def plot_fit_diagnostics(fit_result: FitResult, ctx: FitContext,
     ax.set_xlabel(f'Model quantiles ({color_key})')
     ax.set_ylabel(f'Observed quantiles ({color_key})')
     ax.set_title('Q-Q: observed vs. best-fit model')
-    ax.text(0.05, 0.95, f'KS = {fit_result.ks_stat:.4f}\np = {fit_result.ks_pvalue:.3g}',
-            transform=ax.transAxes, va='top', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    # Box with KS statistics, if wanted
+    #ax.text(0.05, 0.95, f'KS = {fit_result.ks_stat:.4f}\np = {fit_result.ks_pvalue:.3g}',
+    #        transform=ax.transAxes, va='top', fontsize=9,
+    #        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     # Panel 4: redshift-binned residuals
     ax = axes[1, 1]
@@ -557,9 +572,10 @@ def plot_publication_fit_comparison(fit_result: FitResult, ctx: FitContext,
             kde_mod = gaussian_kde(mod_c)
             ax.plot(x_grid, kde_mod(x_grid), color=c, lw=1.3, ls='--')
 
-        ax.text(0.97, 0.97, f'KS: {fit_result.baseline_ks:.3f} \u2192 {fit_result.ks_stat:.3f}',
-                transform=ax.transAxes, ha='right', va='top', fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='whitesmoke', alpha=0.9))
+        # Box with KS statistics, for publication
+        #ax.text(0.97, 0.97, f'KS: {fit_result.baseline_ks:.3f} \u2192 {fit_result.ks_stat:.3f}',
+        #        transform=ax.transAxes, ha='right', va='top', fontsize=9,
+        #        bbox=dict(boxstyle='round,pad=0.3', facecolor='whitesmoke', alpha=0.9))
 
         ax.set_xlabel(f'{color_key} (mag)')
         ax.set_ylabel('Probability density')
@@ -577,6 +593,98 @@ def plot_publication_fit_comparison(fit_result: FitResult, ctx: FitContext,
         plt.close(fig)
 
     return outpath
+
+
+# -----------------------------------------------------------------------------
+# Persisting fit results back into the warp template pkl (v3)
+# -----------------------------------------------------------------------------
+
+def build_color_correction_record(color_key: str, fit_result: FitResult, ctx: FitContext) -> dict:
+    """Package one color's fit into a plain-dict record safe to pickle and
+    to round-trip through JSON/CSV if ever needed downstream.
+
+    'band1'/'band2' are split out from color_key so a caller can pass this
+    record straight through as delta_c_band1/delta_c_band2 (and
+    delta_c/av_dist/av_scale) to WarpfitTemplateLoader.get_templates(
+    color_mode='mwdust', ...), which takes those as call-time arguments
+    rather than reading them out of model_colors itself.
+    """
+    band1, band2 = color_key.split('-')
+    return {
+        'color': color_key,
+        'band1': band1,
+        'band2': band2,
+        'delta_c': fit_result.delta_c,
+        'av_scale': fit_result.av_scale,
+        'av_dist': fit_result.av_dist,
+        'av_mean': fit_result.av_mean,
+        'dcolor_dav': ctx.dcolor_dav,
+        'ks_stat': fit_result.ks_stat,
+        'ks_pvalue': fit_result.ks_pvalue,
+        'baseline_ks': fit_result.baseline_ks,
+        'baseline_pvalue': fit_result.baseline_pvalue,
+        'success': fit_result.success,
+        'nfev': fit_result.nfev,
+        'obs_mean': fit_result.obs_mean,
+        'obs_std': fit_result.obs_std,
+        'model_mean': fit_result.model_mean,
+        'model_std': fit_result.model_std,
+        'n_sn': int(len(ctx.obs_color)),
+    }
+
+
+def save_offset_extinction_corr(
+    warploader: WarpfitTemplateLoader,
+    class_name: str,
+    color_corrections: dict[str, dict],
+    av_dist: str,
+    delta_c_bounds: tuple[float, float],
+    av_scale_bounds: tuple[float, float],
+) -> str | None:
+    """Write the per-color delta_c/av_scale fits into the class's
+    model-color metadata and persist the pkl, mirroring the
+    update_model_colors()/save_class() pattern used by the upstream
+    Johnson-SU/linear-correction script (so both sets of corrections end up
+    in the same pkl). Returns the output pkl path, or None on failure.
+
+    update_model_colors() overwrites 'model_colors' wholesale rather than
+    merging, so we first read out whatever is already cached/on-disk for
+    this class via the public get_model_colors() getter (e.g. the
+    gamma/delta/loc/scale/linear_corr block the upstream Johnson-SU script
+    wrote there -- required by get_templates() for color_mode='harmonize'/
+    'draw'/'target'/'mwdust') and only add/replace the
+    'offset_extinction_corr' key within that dict before writing it back.
+    """
+    if not color_corrections:
+        return None
+
+    safe_class = class_name.replace('/', '')
+
+    try:
+        existing = warploader.get_model_colors(class_name)
+    except FileNotFoundError as e:
+        # No pkl for this class yet at all (not even from the upstream
+        # Johnson-SU script) -- nothing to merge with.
+        print(f"  WARNING: no existing warpcoeffs file for {class_name} ({e}); "
+              f"writing offset_extinction_corr as the only model_colors entry.")
+        existing = None
+
+    model_colors_update = dict(existing) if existing is not None else {}
+    model_colors_update['offset_extinction_corr'] = {
+        'av_dist': av_dist,
+        'delta_c_bounds': list(delta_c_bounds),
+        'av_scale_bounds': list(av_scale_bounds),
+        'colors': color_corrections,
+    }
+
+    try:
+        warploader.update_model_colors(safe_class, model_colors_update)
+        pkl_path = str(Path(warploader.save_class(safe_class)))
+    except Exception as e:
+        print(f"  WARNING: failed to persist offset+extinction fits to pkl: {e}")
+        return None
+
+    return pkl_path
 
 
 # -----------------------------------------------------------------------------
@@ -631,6 +739,7 @@ def analyze_class_offset_extinction(class_name: str, args: argparse.Namespace) -
     av_scale_bounds = tuple(args.av_scale_bounds)
 
     results = []
+    color_corrections: dict[str, dict] = {}
     for color_key in sorted(available_colors):
         if '-' not in color_key:
             continue
@@ -639,7 +748,7 @@ def analyze_class_offset_extinction(class_name: str, args: argparse.Namespace) -
 
         fit_result, ctx = fit_offset_extinction(
             sn_data, templates, color_key, unique_z,
-            rest_phase=args.phase,
+            rest_phase_mode=args.rest_phase_mode,
             n_draw_per_z=args.n_draw_per_z,
             random_seed=args.random_seed + hash(color_key) % 10000,
             av_dist=args.av_dist,
@@ -659,6 +768,9 @@ def analyze_class_offset_extinction(class_name: str, args: argparse.Namespace) -
         print(f"    KS: {fit_result.baseline_ks:.4f} \u2192 {fit_result.ks_stat:.4f} "
               f"(p = {fit_result.ks_pvalue:.3g})")
 
+        # v3: stash this color's fit for later persistence into the pkl.
+        color_corrections[color_key] = build_color_correction_record(color_key, fit_result, ctx)
+
         diag_path = plot_fit_diagnostics(
             fit_result, ctx, color_key, class_name, args.outdir,
             delta_c_bounds=delta_c_bounds, av_scale_bounds=av_scale_bounds,
@@ -675,11 +787,27 @@ def analyze_class_offset_extinction(class_name: str, args: argparse.Namespace) -
             'pub_path': str(pub_path),
         })
 
+    # v3: persist delta_c / av_scale (and the rest of the fit diagnostics)
+    # back into the class's pkl via the same loader used to read the
+    # harmonized templates above, so downstream code can pick them up
+    # alongside the Johnson-SU / linear-color corrections.
+    output_pkl = None
+    if not getattr(args, 'no_save_pkl', False):
+        output_pkl = save_offset_extinction_corr(
+            warploader, class_name, color_corrections,
+            args.av_dist, delta_c_bounds, av_scale_bounds,
+        )
+        if output_pkl:
+            print(f"\n  Saved offset+extinction fits ({len(color_corrections)} colors) to: {output_pkl}")
+    elif color_corrections:
+        print("\n  --no-save-pkl set: skipping pkl persistence of offset+extinction fits")
+
     return {
         'class_name': class_name,
         'n_sn': len(sn_data),
         'z_range': [min(s['z'] for s in sn_data), max(s['z'] for s in sn_data)],
         'color_results': results,
+        'output_pkl': output_pkl,
     }
 
 
@@ -726,6 +854,7 @@ def run_offset_extinction_fit(args: argparse.Namespace) -> list[dict]:
                     'success': fr.success,
                     'diag_path': cr['diag_path'],
                     'pub_path': cr['pub_path'],
+                    'output_pkl': r.get('output_pkl'),
                 })
 
         stats_df = pd.DataFrame(rows)
@@ -742,6 +871,9 @@ def run_offset_extinction_fit(args: argparse.Namespace) -> list[dict]:
                   f"\u27e8A_V\u27e9={row['av_mean']:.3f} ({row['av_dist']}), "
                   f"KS {row['baseline_ks']:.3f} \u2192 {row['ks_stat']:.3f} "
                   f"(\u0394={improvement:+.3f})")
+        for r in results:
+            if r.get('output_pkl'):
+                print(f"\npkl updated for {r['class_name']}: {r['output_pkl']}")
 
     return results
 
@@ -761,7 +893,7 @@ def build_parser() -> argparse.ArgumentParser:
     g_class.add_argument("--cid", type=int, default=11)
 
     parser.add_argument("--warpdir", type=Path,
-                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v4"))
+                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v5"))
     parser.add_argument("--outdir", type=Path, default=Path("."))
     parser.add_argument("--fit-json-pattern", type=str,
                         default="/Users/jnordin/data/models/sncosmo/btsfitsv{version}_{class_name}.json")
@@ -769,11 +901,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-selection", default='all')
     parser.add_argument("--snbasis-selection", default="all")
     parser.add_argument("--random-seed", type=int, default=42)
-    parser.add_argument("--version", default="4")
-    parser.add_argument("--suffix", default="_col")
+    parser.add_argument("--version", default="5")
+    parser.add_argument("--suffix", default="")     #. "_col" in some previous versions  
 
-    parser.add_argument("--phase", type=float, default=0,
-                        help="Rest-frame phase relative to peak (days)")
+    parser.add_argument("--rest_phase_mode", type=str, default='ztfg',
+                        help="What band to use when determining phase for color calculation.")
     parser.add_argument("--n-draw-per-z", type=int, default=None,
                         help="Subsample templates per redshift for the one-time intrinsic "
                              "evaluation (default: use all templates)")
@@ -782,7 +914,7 @@ def build_parser() -> argparse.ArgumentParser:
     g_fit.add_argument("--av-dist", choices=list(AV_DISTRIBUTIONS), default="exponential",
                        help="Family for the per-draw A_V distribution")
     g_fit.add_argument("--delta-c-bounds", type=float, nargs=2, default=[-1.0, 1.0])
-    g_fit.add_argument("--av-scale-bounds", type=float, nargs=2, default=[0.0, 1.0])
+    g_fit.add_argument("--av-scale-bounds", type=float, nargs=2, default=[0.0, 2.0])
     g_fit.add_argument("--n-grid", type=int, default=25,
                        help="Coarse grid resolution per axis before the local polish")
 
@@ -794,6 +926,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-missing", action="store_true", default=True)
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+
+    g_persist = parser.add_argument_group("pkl persistence")
+    g_persist.add_argument("--no-save-pkl", action="store_true",
+                           help="Skip writing delta_c/av_scale fit results back into the "
+                                "warp template pkl files (CSV + plots are still written).")
 
     return parser
 
@@ -816,5 +953,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-    

@@ -871,7 +871,9 @@ def process_single_sn(
             print('... tab', tab)
             print('... wfitted_model', wfitted_model)
             print('... wresult', wresult)
-            raise ValueError('Failed to make plot')
+            print('NOTE: ... skipping this one!')
+            continue
+            #raise ValueError('Failed to make plot')
 
         if fiteval in ['poor', 'var']:
             print('... reject fit', fiteval, row["sf"], wresult["chisq"] / wresult["ndof"])

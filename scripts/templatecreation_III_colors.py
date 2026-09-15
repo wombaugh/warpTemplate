@@ -47,8 +47,10 @@ class LinearDust(PropagationEffect):
     
     def propagate(self, wave, flux):
         a = self._parameters[0]
-        # Linear extinction: flux * 10^(-0.4 * a * (wave/lambda_0 - 1))
+        # Linear extinction: (more nonlinear)
         extinction = 10.**(-0.4 * a * (wave / self._lambda_0 - 1.))
+        # Fully linear 
+        # extinction =  1+a * (wave / lambda_0 - 1.)
         return flux * extinction
 
 
