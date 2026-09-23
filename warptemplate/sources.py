@@ -28,6 +28,8 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
     flux : ndarray of shape (N, M)
         Warp values defined on (phase, wave). This acts as a multiplicative
         modifier to the original flux.
+    phase_lim: tuple of two, Optional
+        Optional (min_phase, max_phase) limits to apply to the warped source.
     original_template_name : str
         Name of the base template in sncosmo.
     original_template_version : str, optional
@@ -57,6 +59,7 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         time_spline_degree: int = 3,
         warp_reddening_a: Optional[float] = None,
         warp_reddening_pivot: float = 6250.,
+        phase_lim: Optional[tuple[float, float]] = None,
         name: Optional[str] = None,
         version: Optional[str] = None,
     ) -> None:
@@ -90,11 +93,21 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
         # Behavior flag
         self._zero_before: bool = True
 
+        # Determine phase limits to use
+        if phase_lim is not None:
+            minphase = max(phase_arr.min(), phase_lim[0])
+            maxphase = min(phase_arr.max(), phase_lim[1])
+#            print(f"Applying phase limits: {phase_lim}, resulting in minphase={minphase}, maxphase={maxphase}")
+#            print('Original phase range: ', phase_arr.min(), phase_arr.max())
+        else:
+            minphase = phase_arr.min()
+            maxphase = phase_arr.max()            
+
         # Restrict phase grid to overlap region
         original_phase: npt.NDArray[np.float64] = self._original_source._phase
         self._phase: npt.NDArray[np.float64] = original_phase[
-            (original_phase >= phase_arr.min()) &
-            (original_phase <= phase_arr.max())
+            (original_phase >= minphase) &
+            (original_phase <= maxphase)
         ]
 
         # Restrict wavelength grid to overlap region
@@ -136,4 +149,4 @@ class WarpedTimeSeriesSource(TimeSeriesSource):
             kx=time_spline_degree,
             ky=3
         )
-        
+

@@ -207,12 +207,13 @@ CLASS_MAP = {
 # class's sample.
 NARROW_Z_LIMITS = {
     'SLSN-II': [0.0, 0.3], 'SLSN-I': [0.0, 0.3],
-    'SN Ia-91bg': [0.01, 0.055], 'SN Ia-91T': [0.01, 0.10],
-    'SN Ia-CSM': [0.01, 0.10], 'SN IIn': [0.0, 0.10],
-    'SN Ia-SC': [0.01, 0.10], 'SN Ia-pec': [0.01, 0.055],
-    'SN Iax': [0.0, 0.055],
+    'SN Ia-91bg': [0.0, 0.055], 'SN Ia-91T': [0.0, 0.10],
+    'SN Ia-CSM': [0.0, 0.10], 'SN IIn': [0.0, 0.10],
+    'SN Ia-SC': [0.0, 0.10], 'SN Ia-pec': [0.01, 0.055],
+    'SN Iax': [0.0, 0.055], 'TDE': [0.0, 0.3],
+    'SN Ibn': [0.0, 0.055], 'SN Ic-BL': [0.0, 0.055],
 }
-DEFAULT_Z_LIMITS = [0.0, 0.07]
+DEFAULT_Z_LIMITS = [0.0, 0.04]
 
 
 def get_class_name(category: str, cid: int) -> str:
@@ -729,7 +730,7 @@ def plot_color_diagnostics(obs_data: list[dict],
     
     safe_name = class_name.replace('/', '')
     safe_color = color_key.replace('/', '-')
-    outpath = outdir / f"diag_hist_{safe_name}_{safe_color}.pdf"
+    outpath = outdir / f"diag_hist_{safe_name}_{safe_color}.png"
     plt.savefig(outpath, dpi=300, bbox_inches='tight')
     plt.close(fig)
     
@@ -863,13 +864,13 @@ def old_plot_publication_color_comparison(obs_data: list[dict],
 
         safe_name = class_name.replace('/', '')
         safe_color = color_key.replace('/', '-')
-        outpath_pdf = outdir / f"pub_hist_{safe_name}_{safe_color}.pdf"
+#        outpath_pdf = outdir / f"pub_hist_{safe_name}_{safe_color}.pdf"
         outpath_png = outdir / f"pub_hist_{safe_name}_{safe_color}.png"
-        fig.savefig(outpath_pdf, bbox_inches='tight')
+#        fig.savefig(outpath_pdf, bbox_inches='tight')
         fig.savefig(outpath_png, bbox_inches='tight', dpi=300)
         plt.close(fig)
 
-    return outpath_pdf
+    return outpath_png
 
 def plot_publication_color_comparison(obs_data: list[dict],
                                       raw_model_colors: np.ndarray | None,
@@ -968,13 +969,13 @@ def plot_publication_color_comparison(obs_data: list[dict],
 
         safe_name = class_name.replace('/', '')
         safe_color = color_key.replace('/', '-')
-        outpath_pdf = outdir / f"pub_hist_{safe_name}_{safe_color}.pdf"
+        #outpath_pdf = outdir / f"pub_hist_{safe_name}_{safe_color}.pdf"
         outpath_png = outdir / f"pub_hist_{safe_name}_{safe_color}.png"
-        fig.savefig(outpath_pdf, bbox_inches='tight')
+        #fig.savefig(outpath_pdf, bbox_inches='tight')
         fig.savefig(outpath_png, bbox_inches='tight', dpi=300)
         plt.close(fig)
 
-    return outpath_pdf
+    return outpath_png
 
 
 def plot_redshift_color_comparison(obs_data: list[dict],
@@ -1129,7 +1130,7 @@ def plot_redshift_color_comparison(obs_data: list[dict],
     
     safe_name = class_name.replace('/', '')
     safe_color = color_key.replace('/', '-')
-    outpath = outdir / f"redshift_comp_{safe_name}_{safe_color}.pdf"
+    outpath = outdir / f"redshift_comp_{safe_name}_{safe_color}.png"
     plt.savefig(outpath, dpi=300)
     plt.close(fig)
     
@@ -1195,6 +1196,7 @@ def analyze_class_redshifted(class_name: str, args: argparse.Namespace) -> dict 
                 random_seed=args.random_seed,
                 color_mode=color_mode,
                 min_fit_quality=None,
+                phase_buffer=10,
             )
             mode_templates[mode] = templates
             print(f"  {mode:12s}: {len(templates)} templates")
@@ -1382,7 +1384,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Paths
     parser.add_argument("--warpdir", type=Path,
-                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v5"))
+                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v6"))
     parser.add_argument("--outdir", type=Path, default=Path("."))
     parser.add_argument("--fit-json-pattern", type=str,
                         default="/Users/jnordin/data/models/sncosmo/btsfitsv{version}_{class_name}.json")
@@ -1391,7 +1393,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-selection", default='all')
     parser.add_argument("--snbasis-selection", default="all")
     parser.add_argument("--random-seed", type=int, default=42)
-    parser.add_argument("--version", default="5")
+    parser.add_argument("--version", default="6")
     parser.add_argument("--suffix", default="", help="Optional suffix for template files (e.g. '_col')") 
     
     # Redshifted evaluation

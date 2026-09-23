@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import johnsonsu
+from scipy.stats import exponnorm
 
 from warptemplate import WarpfitTemplateLoader, add_warpclasses, register_all
 
@@ -53,7 +54,7 @@ def get_class_name(category: str, cid: int) -> str:
 # -----------------------------------------------------------------------------
 
 def get_latest_model_result(model_name: str, infile: Path) -> dict | None:
-    """Retrieve latest Johnson SU fit parameters from accumulated CSV."""
+    """Retrieve latest  fit parameters from accumulated CSV."""
     if not infile.exists():
         return None
 
@@ -118,8 +119,8 @@ def extract_peak_colors(templates: list[dict], band1: str, band2: str,
 # Distribution comparison metrics
 # -----------------------------------------------------------------------------
 
-def compute_kl_divergence(p_samples: np.ndarray, 
-                          gamma: float, delta: float, loc: float, scale: float,
+def compute_kl_divergence(p_samples: np.ndarray,
+                            color_distribution,
                           n_bins: int = 100, range_min: float | None = None,
                           range_max: float | None = None) -> float:
     """Approximate KL divergence between sample histogram and fitted Johnson SU."""
@@ -134,25 +135,24 @@ def compute_kl_divergence(p_samples: np.ndarray,
     bin_width = bin_edges[1] - bin_edges[0]
     
     # Johnson SU PDF
-    pdf_jsu = johnsonsu.pdf(bin_centers, gamma, delta, loc=loc, scale=scale)
+    pdf = color_distribution.pdf(bin_centers)
     
     hist = np.clip(hist, 1e-12, None)
-    pdf_jsu = np.clip(pdf_jsu, 1e-12, None)
+    pdf = np.clip(pdf, 1e-12, None)
     
-    kl = np.sum(hist * bin_width * np.log(hist / pdf_jsu))
+    kl = np.sum(hist * bin_width * np.log(hist / pdf))
     return kl
 
 
 def compute_anderson_darling_statistic(samples: np.ndarray, 
-                                        gamma: float, delta: float, 
-                                        loc: float, scale: float) -> float:
+                                       color_distribition) -> float:
     """Crude A² approximation for Johnson SU (relative comparison only)."""
     x = np.sort(samples)
     n = len(x)
     if n == 0:
         return np.nan
     
-    y = johnsonsu.cdf(x, gamma, delta, loc=loc, scale=scale)
+    y = color_distribition.cdf(x)
     
     i = np.arange(1, n + 1)
     s = np.sum((2 * i - 1) / n * (np.log(y) + np.log1p(-y[::-1])))
@@ -188,19 +188,14 @@ def plot_filled_step(edges: np.ndarray, counts: np.ndarray, color: str, label: s
 
 
 def plot_color_comparison(rawcols: np.ndarray, harmcols: np.ndarray, drawcols: np.ndarray,
-                          model_colors: dict, class_name: str, outdir: Path,
+                          color_distribution, class_name: str, outdir: Path,
                           band1: str = 'ztfg', band2: str = 'ztfr') -> Path:
     """Generate comparison plot for three color modes. Returns output path."""
     
-    # Johnson SU parameters
-    gamma = model_colors['gamma']
-    delta = model_colors['delta']
-    loc = model_colors['loc']
-    scale = model_colors['scale']
     
     # Quantile-based range (Johnson SU hat schwerere tails als EMG)
-    x_min = johnsonsu.ppf(0.001, gamma, delta, loc=loc, scale=scale)
-    x_max = johnsonsu.ppf(0.999, gamma, delta, loc=loc, scale=scale)
+    x_min = color_distribution.ppf(0.001)
+    x_max = color_distribution.ppf(0.999)
     
     all_data = np.concatenate([c for c in [rawcols, harmcols, drawcols] if len(c) > 0])
     if len(all_data) > 0:
@@ -208,7 +203,7 @@ def plot_color_comparison(rawcols: np.ndarray, harmcols: np.ndarray, drawcols: n
         x_max = max(x_max, all_data.max() + 0.1)
     
     x = np.linspace(x_min, x_max, 500)
-    pdf = johnsonsu.pdf(x, gamma, delta, loc=loc, scale=scale)
+    pdf = color_distribution.pdf(x)
     pdf /= pdf.max()
     
     bins = np.linspace(x_min, x_max, 40)
@@ -228,8 +223,8 @@ def plot_color_comparison(rawcols: np.ndarray, harmcols: np.ndarray, drawcols: n
     ax.plot(x, pdf, color='black', lw=2, label='Class PDF')
     
     # Mark distribution parameters (loc = median bei symmetrischer JSU, nicht mean)
-    ax.axvline(x=loc, color='black', linestyle='--', alpha=0.5, lw=1)
-    ax.text(loc, 0.95, f'ξ={loc:.3f}', transform=ax.get_xaxis_transform(),
+    ax.axvline(x=color_distribution.median(), color='black', linestyle='--', alpha=0.5, lw=1)
+    ax.text(color_distribution.median(), 0.95, f'ξ={color_distribution.median():.3f}', transform=ax.get_xaxis_transform(),
             ha='center', va='top', fontsize=9, color='black', alpha=0.7)
     
     ax.grid(linestyle="--", alpha=0.4)
@@ -243,14 +238,14 @@ def plot_color_comparison(rawcols: np.ndarray, harmcols: np.ndarray, drawcols: n
         f"N(harm)={len(harmcols)}\n"
         f"N(draw)={len(drawcols)}"
     )
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, ha='left', va='top',
-            fontsize=9, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    #ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, ha='left', va='top',
+    #        fontsize=9, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
     
     plt.tight_layout()
     
     # Safe filename
     safe_name = class_name.replace('/', '')
-    outpath = outdir / f"color_distcomp_{safe_name}.pdf"
+    outpath = outdir / f"color_distcomp_{safe_name}.png"
     plt.savefig(outpath, dpi=300)
     plt.close(fig)
     
@@ -332,16 +327,29 @@ def analyze_class(class_name: str, args: argparse.Namespace) -> dict | None:
         if not args.skip_missing:
             raise ValueError(f"Missing fit data for {class_name}")
         return None    
-    # Verify required keys exist
-    required_keys = ['gamma', 'delta', 'loc', 'scale']
-    if not all(k in model_colors for k in required_keys):
-        print(f"WARNING: Fit for {class_name} missing required keys {required_keys}")
-        if not args.skip_missing:
-            raise ValueError(f"Incomplete fit data for {class_name}")
-        return None
-    
-    print(f"Loaded fit: γ={model_colors['gamma']:.3f}, δ={model_colors['delta']:.3f}, "
-          f"ξ={model_colors['loc']:.3f}, λ={model_colors['scale']:.3f}")
+
+
+    # Two potential color fit modes - emg and johnsonsu 
+    if "K" in model_colors:
+        color_distribution = exponnorm(
+            float(model_colors['K']),
+            float(model_colors['loc']),
+            float(model_colors['scale'])
+        )
+        print('... comparison EMG color_distribution with K, loc, scale =',
+            model_colors["K"], model_colors["loc"], model_colors["scale"])
+    elif "gamma" in model_colors:
+        color_distribution = johnsonsu(
+            float(model_colors["gamma"]),
+            float(model_colors["delta"]),
+            loc=float(model_colors["loc"]), 
+            scale=float(model_colors["scale"]),
+        )
+        print('... comparision JohnsohnSU color_distribution with gamma, delta, loc, scale =',
+            model_colors["gamma"], model_colors["delta"], model_colors["loc"], model_colors["scale"])
+
+#    print(f"Loaded fit: γ={model_colors['gamma']:.3f}, δ={model_colors['delta']:.3f}, "
+#          f"ξ={model_colors['loc']:.3f}, λ={model_colors['scale']:.3f}")
         
     # Initialize loader with version and suffix (matches analysis pipeline)
     warploader = WarpfitTemplateLoader(
@@ -368,6 +376,7 @@ def analyze_class(class_name: str, args: argparse.Namespace) -> dict | None:
                 snbasis_selection=args.snbasis_selection,
                 random_seed=args.random_seed,
                 color_mode=color_mode,
+                phase_buffer=None,
 #                min_fit_quality='gold',            
             )
             modes[mode] = templates
@@ -388,10 +397,10 @@ def analyze_class(class_name: str, args: argparse.Namespace) -> dict | None:
     print(f"  Valid colors: raw={len(rawcols)}, harm={len(harmcols)}, draw={len(drawcols)}")
     
     # Compute statistics
-    gamma = model_colors['gamma']
-    delta = model_colors['delta']
-    loc = model_colors['loc']
-    scale = model_colors['scale']
+    #gamma = model_colors['gamma']
+    #delta = model_colors['delta']
+    #loc = model_colors['loc']
+    #scale = model_colors['scale']
 
     stats = {
         'raw_mean': float(np.mean(rawcols)) if len(rawcols) > 0 else np.nan,
@@ -400,24 +409,26 @@ def analyze_class(class_name: str, args: argparse.Namespace) -> dict | None:
         'harm_std': float(np.std(harmcols)) if len(harmcols) > 0 else np.nan,
         'draw_mean': float(np.mean(drawcols)) if len(drawcols) > 0 else np.nan,
         'draw_std': float(np.std(drawcols)) if len(drawcols) > 0 else np.nan,
-        'target_loc': float(loc),
+        'target_loc': float(color_distribution.median()),
     }
+    print('stats', stats)
     
     # KL divergences
     for mode, cols in [('raw', rawcols), ('harm', harmcols), ('draw', drawcols)]:
         if len(cols) > 0:
-            stats[f'{mode}_kl_div'] = compute_kl_divergence(cols, gamma, delta, loc, scale)
+            stats[f'{mode}_kl_div'] = compute_kl_divergence(cols, color_distribution)
         else:
             stats[f'{mode}_kl_div'] = np.nan
+    print('klstats', stats)
 
     # Generate plot
-    plot_path = plot_color_comparison(rawcols, harmcols, drawcols, model_colors,
+    plot_path = plot_color_comparison(rawcols, harmcols, drawcols, color_distribution,
                                       class_name, args.outdir, args.band1, args.band2)
     print(f"  Plot saved: {plot_path}")
     
     return {
         'class_name': class_name,
-        'model_colors': {k: model_colors[k] for k in ['gamma', 'delta', 'loc', 'scale', 'color1', 'color2']},
+#        'model_colors': {k: model_colors[k] for k in ['gamma', 'delta', 'loc', 'scale', 'color1', 'color2']},
         'raw_colors': rawcols,
         'harmonize_colors': harmcols,
         'draw_colors': drawcols,
@@ -500,7 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Paths
     parser.add_argument(
-        "--warpdir", type=Path, default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v5"),
+        "--warpdir", type=Path, default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v6"),
         help="Directory containing warp coefficient files"
     )
     parser.add_argument(
@@ -508,8 +519,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for plots and tables"
     )
     parser.add_argument(
-        "--fit-csv", type=Path, default=Path("warptemplate_v5_color_fits.csv"),
-        help="CSV file with accumulated Johnson SU fit results"  # geändert
+        "--fit_csv", type=Path, default=Path("warptemplate_v6_color_fits.csv"),
+        help="CSV file with accumulated  fit results"  # geändert
     )
         
     # Template sampling
@@ -526,7 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reproducibility seed"
     )
     parser.add_argument(
-        "--version", default="5",
+        "--version", default="6",
         help="Warp model version"
     )
     parser.add_argument(

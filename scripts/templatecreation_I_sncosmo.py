@@ -138,8 +138,8 @@ def parse_args():
     )
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 'v5'),
-        help='Version string for output files and log (default: $VERSION or v5)'
+        default=os.environ.get('VERSION', 'v6'),
+        help='Version string for output files and log (default: $VERSION or v6)'
     )
     parser.add_argument(
         '--mongodb',
@@ -372,6 +372,41 @@ def main():
 
     print('doing fits for', nclasses[classid])
 
+    # Analysis and output
+    zclass = {
+        # These are v-3-5 limits used, for unclear reasons changed from initial guesses. 
+#        'SLSN-II': [0.0, 0.5],
+#        'SLSN-I': [0.0, 0.7],
+#        'SN Ia-91bg': [0.01, 0.055],
+#        'SN Ia-91T': [0.01, 0.10],
+#        'SN Ia-CSM': [0.01, 0.10],
+#        'SN IIn': [0.0, 0.10],
+#        'SN Ia-SC': [0.01, 0.10],
+#        'SN Ia-pec': [0.01, 0.055],
+#        'SN Iax': [0.0, 0.055],
+#        'TDE': [0.0, 0.55],
+        # Updated to agree with the original limits (for confirmation)
+        'SLSN-II': [0.0, 0.3],
+        'SLSN-I': [0.0, 0.3],
+        'SN Ia-91bg': [0.0, 0.055],
+        'SN Ia-91T': [0.0, 0.1],
+        'SN Ia-CSM': [0.0, 0.1],
+        'SN IIn': [0.0, 0.10],
+        'SN Ia-SC': [0.0, 0.1],
+        'SN Ia-pec': [0.0, 0.055],
+        'SN Iax': [0.0, 0.055],
+        'TDE': [0.0, 0.3],
+        'SN Ibn': [0.0, 0.055],
+        'SN Ic-BL': [0.0, 0.055],
+    }
+    # Aug / Sep values 
+    # zlim = zclass.get(nclasses[classid], [0.0, 0.07])
+    # Reset Sep 17 
+    zlim = zclass.get(nclasses[classid], [0.0, 0.04])
+    print('Using {} z lim.'.format('specific' if nclasses[classid] in zclass else 'default'))
+
+
+
     # Pipeline parameters
     include_sigma = 3
 
@@ -475,8 +510,17 @@ def main():
 
         if name in to_reject:
             print('{} skipped - on veto list'.format(name))
-            failkey.append(1)
+            failkey.append(0)
             continue
+
+        # Here we could reject sne outside the desired range.
+        if zlim[0] <= float(z) <= zlim[1]:
+            print('... z in range', z, zlim)
+        else:
+            print('... z out of range', z, zlim)
+            failkey.append(1)
+            #continue
+
 
         tab = get_db_table(name, database=db, tabulators=tabulators)
         tab.sort('time')
@@ -655,7 +699,9 @@ def main():
             for peak_col_label in ['gp_ztfg-ztfr', 'gp_ztfr-ztfri']:
                 if peak_col_label in peakcol:
                     mdict['peak_'+peak_col_label] = peakcol[peak_col_label]
-            results[modelname].append(mdict)
+
+            if zlim[0] <= float(z) <= zlim[1]:
+                results[modelname].append(mdict)
 
             plotname = '{:.2}_{}_{}_{:.2}_{:.2}_{:.2}.png'.format(
                 presum, name, modelname,
@@ -680,29 +726,7 @@ def main():
         elif atleastone == 2:
             failkey.append(99)
 
-    # Analysis and output
-    zclass = {
-        # Updated from the actual combined SLSN/TDE catalog's real observed
-        # ranges (TDE [0.011, 0.519], SLSN-I [0.039, 0.670], SLSN-II
-        # [0.018, 0.4846]) plus a little padding -- NOT the same as the
-        # previous [0.0, 0.3] entries, which excluded roughly half the
-        # SLSN-I sample and a meaningful chunk of SLSN-II. This is a
-        # data-availability choice; adjust if [0.0, 0.3] was chosen for a
-        # specific physical/quality reason rather than just "what BTS alone
-        # covered".
-        'SLSN-II': [0.0, 0.5],
-        'SLSN-I': [0.0, 0.7],
-        'SN Ia-91bg': [0.01, 0.055],
-        'SN Ia-91T': [0.01, 0.10],
-        'SN Ia-CSM': [0.01, 0.10],
-        'SN IIn': [0.0, 0.10],
-        'SN Ia-SC': [0.01, 0.10],
-        'SN Ia-pec': [0.01, 0.055],
-        'SN Iax': [0.0, 0.055],
-        'TDE': [0.0, 0.55],
-    }
-    zlim = zclass.get(nclasses[classid], [0.0, 0.07])
-    print('Using {} z lim.'.format('specific' if nclasses[classid] in zclass else 'default'))
+
 
     fitstore = []
     fitvolume = []

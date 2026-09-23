@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Analyze warp template color distributions and generate color-corrected warp coefficients.
 
-Fits Johnson SU distributions to template peak colors,
+Fits EMG & Johnson SU distributions to template peak colors,
 derives linear color correction, and stores updated warp coefficient files.
 """
 
@@ -19,9 +19,18 @@ import pandas as pd
 import sncosmo
 from sncosmo import PropagationEffect
 from scipy.optimize import curve_fit, minimize_scalar
+from scipy.stats import exponnorm
 from scipy.stats import johnsonsu
 
+
 from warptemplate import WarpfitTemplateLoader, add_warpclasses, register_all
+
+# -----------------------------------------------------------------------------
+# Fit mode
+# -----------------------------------------------------------------------------
+
+FIT_MODE = 'emg'    # Options: 'emg' (exponentially modified Gaussian), 'johnsonsu' (Johnson SU distribution)   
+
 
 
 # -----------------------------------------------------------------------------
@@ -131,6 +140,44 @@ def apply_filter_pipeline(data: np.ndarray, class_name: str) -> np.ndarray:
 # Fitting and storage
 # -----------------------------------------------------------------------------
 
+def fit_emg(data: np.ndarray) -> tuple[float, float, float]:
+    """Fit exponentially modified Gaussian. Returns (K, loc, scale)."""
+    K, loc, scale = exponnorm.fit(data)
+    return K, loc, scale
+
+def fit_emg_and_store(
+    data: np.ndarray,
+    model_name: str,
+    col1: str,
+    col2: str,
+    outfile: Path,
+    also_store: dict | None = None,
+) -> tuple[float, float, float]:
+    """Fit EMG and append results to CSV."""
+    K, loc, scale = fit_emg(data)
+
+    result = {
+        "model": model_name,
+        "K": K,
+        "loc": loc,
+        "scale": scale,
+        "color1": col1,
+        "color2": col2,
+        "n": len(data),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if also_store:
+        result.update(also_store)
+
+    df = pd.DataFrame([result])
+    if outfile.exists():
+        df.to_csv(outfile, mode="a", header=False, index=False)
+    else:
+        df.to_csv(outfile, index=False)
+
+    return K, loc, scale
+
+
 def fit_johnsonsu(data: np.ndarray) -> tuple[float, float, float, float]:
     """Fit Johnson SU distribution. Returns (gamma, delta, loc, scale)."""
     gamma, delta, loc, scale = johnsonsu.fit(data)
@@ -174,6 +221,66 @@ def fit_johnsonsu_and_store(
 # -----------------------------------------------------------------------------
 # Plotting
 # -----------------------------------------------------------------------------
+
+def plot_emg_fit(
+    data: np.ndarray,
+    K: float,
+
+    loc: float,
+    scale: float,
+    class_name: str,
+    outdir: Path,
+) -> Path:
+    """Generate publication-quality EMG fit plot. Returns output path."""
+    # Determine bins
+    n = len(data)
+    bins = 5 if n < 30 else 10 if n < 120 else 20
+
+    # Plot range
+    s, e = float(np.min(data)), float(np.max(data))
+    s = min(s, loc - 0.8)
+    e = max(e, loc + 1.2)
+
+    x = np.linspace(s, e, 1000)
+    pdf = exponnorm.pdf(x, K, loc=loc, scale=scale)
+
+    plt.rcParams.update({
+        "font.size": 14,
+        "axes.labelsize": 16,
+        "axes.titlesize": 16,
+        "legend.fontsize": 12,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "axes.linewidth": 1.2,
+        "figure.dpi": 150,
+    })
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    ax.hist(data, bins=bins, density=True, alpha=0.5, color="steelblue",
+            edgecolor="black", linewidth=0.5, label="Data")
+    ax.plot(x, pdf, color="darkred", lw=2.5, label="EMG fit")
+
+    ax.set_xlabel("Peak g-R (ZTF mag)")
+    ax.set_ylabel("Relative Frequency")
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    text = f"K = {K:.2f}\n$\\mu$ = {loc:.2f}\n$\\sigma$ = {scale:.2f}"
+    ax.text(0.98, 0.95, text, transform=ax.transAxes, ha="right", va="top",
+            bbox=dict(boxstyle="round", fc="white", ec="gray"))
+
+    plt.tight_layout()
+
+    safe_name = class_name.replace("/", "")
+    outpath = outdir / f"emg_fit_{safe_name}.png"
+    plt.savefig(outpath, bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+    return outpath
+
+        
 
 def plot_johnsonsu_fit(
     data: np.ndarray,
@@ -317,18 +424,20 @@ def compute_linear_correlations(
     cols: dict[str, float],
     peakphases: dict[float],
     colband: list[str],
-    gamma: float,
-    delta: float,
-    loc: float,
-    scale: float,
     class_name: str,
     toskip: list[str],
     n_draws: int = 100,
     random_state: int = 41,
     disable_progress: bool = False,
+    dist_kwargs: dict | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Simulate target colors and fit linear parameter 'a'. Returns (df_fits, coeffs)."""
-    jsu_dist = johnsonsu(gamma, delta, loc=loc, scale=scale)
+    if FIT_MODE == 'emg':
+        K, loc, scale = dist_kwargs.get('K', 1.0), dist_kwargs.get('loc', 0.0), dist_kwargs.get('scale', 0.5)
+        emg_dist = exponnorm(K, loc=loc, scale=scale)
+    elif FIT_MODE == 'johnsonsu':
+        gamma, delta, loc, scale = dist_kwargs.get('gamma', 0.0), dist_kwargs.get('delta', 1.0), dist_kwargs.get('loc', 0.0), dist_kwargs.get('scale', 0.5)
+        jsu_dist = johnsonsu(gamma, delta, loc=loc, scale=scale)
 
     colfits = []
 
@@ -392,7 +501,10 @@ def compute_linear_correlations(
 
     for k, modid, natcol, warped_model, t0, dc_da, quad_ratio in template_iter:
         # Analytic inversion: a = (target_col - natcol) / dc_da
-        target_colors = jsu_dist.rvs(size=n_draws, random_state=random_state + k)
+        if FIT_MODE == 'emg':
+            target_colors = emg_dist.rvs(size=n_draws, random_state=random_state + k)
+        elif FIT_MODE == 'johnsonsu':
+            target_colors = jsu_dist.rvs(size=n_draws, random_state=random_state + k)
 
         for target_col in target_colors:
             a_fit = (target_col - natcol) / dc_da
@@ -483,6 +595,7 @@ def run_analysis(args: argparse.Namespace) -> dict:
             template_selection=args.template_selection,
             snbasis_selection=args.snbasis_selection,
             min_fit_quality=quality,
+            phase_buffer=args.phase_buffer,
             random_seed=42,
         )
         tmodels = [t['model'].description for t in templates]
@@ -521,43 +634,59 @@ def run_analysis(args: argparse.Namespace) -> dict:
             t['model'].bandmag(colband[0], 'ab', t0)
             - t['model'].bandmag(colband[1], 'ab', t0)
         )
+        if abs(cols[modid])>2:
+            print('had we not rejected these ... model peak color g-r', cols[modid], modid)
         obscols[modid] = t.get('peak_gp_ztfg-ztfr', None)
 
-    # Filter and fit Johnson SU
+    # Filter and fit color distribution
     data_values = np.array(list(cols.values()))
     mydata = apply_filter_pipeline(data_values, class_name)
 
-    if len(cols) >= 5:
+    if len(mydata) <= 5:
         mydata = data_values[np.isfinite(data_values)]
 
     # Fit and store
     fit_csv = args.outdir / args.fit_csv
-    gamma, delta, loc, scale = fit_johnsonsu_and_store(
-        mydata, class_name, colband[0], colband[1],
-        fit_csv, also_store=tcounting,
-    )
-    print(f"Johnson SU fit: gamma={gamma:.3f}, delta={delta:.3f}, loc={loc:.3f}, scale={scale:.3f}")
 
-    # Generate plots
-    jsu_plot = plot_johnsonsu_fit(mydata, gamma, delta, loc, scale, class_name, args.outdir)
+    colargs = {}
+    if FIT_MODE == 'emg':
+        K, loc, scale = fit_emg_and_store(
+            mydata, class_name, colband[0], colband[1],
+            fit_csv, also_store=tcounting,
+        )
+        print(f"EMG fit: K={K:.3f}, loc={loc:.3f}, scale={scale:.3f}")
+        col_plot = plot_emg_fit(mydata, K, loc, scale, class_name, args.outdir)
+        colargs.update({'K': K, 'loc': loc, 'scale': scale})
+    elif FIT_MODE == 'johnsonsu':
+        gamma, delta, loc, scale = fit_johnsonsu_and_store(
+            mydata, class_name, colband[0], colband[1],
+            fit_csv, also_store=tcounting,
+        )
+        print(f"Johnson SU fit: gamma={gamma:.3f}, delta={delta:.3f}, loc={loc:.3f}, scale={scale:.3f}")
+
+        # Generate plots
+        col_plot = plot_johnsonsu_fit(mydata, gamma, delta, loc, scale, class_name, args.outdir)
+        colargs.update({'gamma': gamma, 'delta': delta, 'loc': loc, 'scale': scale})
 
     # Linear color correlations
     dfcol, coeffs = compute_linear_correlations(
         templates, cols, peakphases, colband,
-        gamma, delta, loc, scale, class_name, args.toskip,
+        class_name, args.toskip,
         n_draws=args.n_draws,
         disable_progress=args.no_progress,
+        dist_kwargs=colargs
     )
     linear_plot = plot_linear_correlation(dfcol, coeffs, class_name, args.outdir)
 
     # Build output data structure
+    if FIT_MODE == 'emg':
+        colfitinfo = {'K': K, 'loc': loc, 'scale': scale, 'type': 'exponnorm'}
+    elif FIT_MODE == 'johnsonsu':
+        colfitinfo = {'gamma': gamma, 'delta': delta, 'loc': loc, 'scale': scale, 'type': 'johnsonsu'}
     model_colors = {
-        'gamma': gamma,
-        'delta': delta,
-        'loc': loc,
-        'scale': scale,
         'color1': colband[0],
         'color2': colband[1],
+        FIT_MODE: colfitinfo,
         'linear_corr': {
             'type': 'LinearDust',
             'coeffs': list(coeffs),  # [slope, 0.0]
@@ -594,10 +723,10 @@ def run_analysis(args: argparse.Namespace) -> dict:
         'class_name': class_name,
         'n_templates': len(templates),
         'n_colors': len(cols),
-        'johnsonsu_params': {'gamma': gamma, 'delta': delta, 'loc': loc, 'scale': scale},
+        '{}_params'.format(FIT_MODE)  : colfitinfo,
         'linear_coeffs': list(coeffs),
         'fit_csv': str(fit_csv),
-        'johnsonsu_plot': str(jsu_plot),
+        'col_plot': str(col_plot),
         'linear_plot': str(linear_plot),
         'output_pkl': str(pkl_path),
     }
@@ -656,18 +785,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Specific template IDs to skip"
     )
 
+    g_sel.add_argument(
+        "--phase_buffer", type=float, default=None,
+        help="Limit template phases to the range of the original data used for the fit, plus/minus this buffer (in days). If None, no phase restriction is applied."
+    )
+
     g_analysis = parser.add_argument_group("analysis")
     g_analysis.add_argument(
         "--colband", default="ztfg,ztfr",
         help="Comma-separated band pair for color measurement"
     )
     g_analysis.add_argument(
-        "--version", default="5",
+        "--version", default="6",
         help="Warp model version suffix"
     )
     g_analysis.add_argument(
-        "--fit-csv", default="warptemplate_v5_color_fits.csv",
-        help="CSV file for accumulating Johnson SU fit results"
+        "--fit-csv", default="warptemplate_v6_color_fits.csv",
+        help="CSV file for accumulating color fit results"
     )
 
     g_progress = parser.add_argument_group("progress")

@@ -7,6 +7,7 @@ import random
 from typing import Any, Optional, Union, List, Dict, Mapping
 import numpy as np
 from scipy.stats import johnsonsu
+from scipy.stats import exponnorm
 from .models import get_warpedTimeSeriesModel
 
 
@@ -76,7 +77,11 @@ class WarpfitTemplateLoader:
                         },
                         
                         # Survival function of warped model 
-                        "sf": 0.89,               
+                        "sf": 0.89,
+
+                        # Phase coverage of the data used for the fit (relative to fitted peak)
+                        "fit_phase_min": -12.0,
+                        "fit_phase_max": 75.0,               
                     },
                     # ... further Templates for the same SN
                 ],
@@ -275,8 +280,17 @@ class WarpfitTemplateLoader:
                 "color_mode requires 'model_colors' in the warp coefficient file"
             )
 
-        required = ("gamma", "delta", "loc", "scale", "color1", "color2", "linear_corr")
+        required = ("color1", "color2", "linear_corr")
         missing = [key for key in required if key not in model_colors]
+
+
+        # Two color definitions possible: 'exponnorm' or 'johnsonsu'
+        if "emg" in model_colors:
+            required = ("K", "loc", "scale")
+            missing.extend([key for key in required if key not in model_colors['emg']])
+        elif "johnsonsu" in model_colors:
+            required = ("gamma", "delta", "loc", "scale")
+            missing.extend([key for key in required if key not in model_colors['johnsonsu']])
         if missing:
             raise ValueError(
                 "Incomplete model_colors metadata. "
@@ -311,6 +325,7 @@ class WarpfitTemplateLoader:
         template_selection: Union[int, str] = 1,
         snbasis_selection: Union[int, str] = 1,
         min_fit_quality: Optional[str] = None,
+        phase_buffer: Optional[float] = None,
         random_seed: Optional[int] = None,
         color_mode: Optional[str] = None,
         target_peak_color: Optional[float] = None,
@@ -356,6 +371,9 @@ class WarpfitTemplateLoader:
             - "gold" → only best fits, type-compatible
             - "silver" → good fits or type-compatible
             - "bronze" → all SN bases regardless
+
+        phase_buffer : float, optional
+            Limit template phases to the range of the original data used for the fit, plus/minus this buffer (in days).
 
         random_seed : int, optional
             Seed for reproducible random sampling.
@@ -461,16 +479,23 @@ class WarpfitTemplateLoader:
             model_colors = self._validate_model_colors(model_colors)
             color_poly = np.poly1d(model_colors["linear_corr"]["coeffs"])
             color_pivot = model_colors["linear_corr"]["lambda_0"]
-#            print('... initialized color_poly:', color_poly)
-#            print('... initialized color_pivot:', color_pivot)
-            color_distribution = johnsonsu(
-                float(model_colors["gamma"]),
-                float(model_colors["delta"]),
-                loc=float(model_colors["loc"]), 
-                scale=float(model_colors["scale"]),
-            )
-#            print('... initialized color_distribution with gamma, delta, loc, scale =',
-#                  model_colors["gamma"], model_colors["delta"], model_colors["loc"], model_colors["scale"])
+            if "emg" in model_colors:
+                color_distribution = exponnorm(
+                    float(model_colors['emg']['K']),
+                    float(model_colors['emg']['loc']),
+                    float(model_colors['emg']['scale'])
+                )
+                print('... initialized color_distribution with K, loc, scale =',
+                      model_colors['emg']["K"], model_colors['emg']["loc"], model_colors['emg']["scale"])
+            elif "johnsonsu" in model_colors:
+                color_distribution = johnsonsu(
+                    float(model_colors['johnsonsu']["gamma"]),
+                    float(model_colors['johnsonsu']["delta"]),
+                    loc=float(model_colors['johnsonsu']["loc"]), 
+                    scale=float(model_colors['johnsonsu']["scale"]),
+                )
+                print('... initialized color_distribution with gamma, delta, loc, scale =',
+                      model_colors['johnsonsu']["gamma"], model_colors['johnsonsu']["delta"], model_colors['johnsonsu']["loc"], model_colors['johnsonsu']["scale"])
         else:
             color_poly = None
             color_distribution = None
@@ -589,6 +614,14 @@ class WarpfitTemplateLoader:
                         rng=np_rng,
                     )
 
+                # Potential phase limits to apply
+                if phase_buffer is not None:
+                    fit_phase_min = float(warpfit.get("fit_phase_min", -np.inf)) - phase_buffer
+                    fit_phase_max = float(warpfit.get("fit_phase_max", np.inf)) + phase_buffer
+                    phase_lim = (fit_phase_min, fit_phase_max)
+                else:
+                    phase_lim = None
+
                 try:
                     model = get_warpedTimeSeriesModel(
                         name=f"{sn_name}_{template_sn or 'tpl'}",
@@ -598,6 +631,7 @@ class WarpfitTemplateLoader:
                         original_template_version=None,
                         sample_color_amplitude=samplecorr_ebv,
                         sample_color_pivot=color_pivot,
+                        phase_lim=phase_lim,
                         samplecorr_bands=[
                             model_colors["color1"],
                             model_colors["color2"],

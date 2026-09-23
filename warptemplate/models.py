@@ -113,7 +113,9 @@ class ColorTiltEffect(sncosmo.PropagationEffect):
     """
     _param_names = ['delta_c']
     param_names_latex = ['\\Delta c']
-
+    _minwave = 1000.
+    _maxwave = 33333.33
+    
     def __init__(self, wave_band1: float, wave_band2: float):
         wave_anchors = np.array([float(wave_band1), float(wave_band2)])
         sign_coeffs = np.array([0.5, -0.5])  # coefficient of delta_c at each anchor
@@ -158,6 +160,7 @@ def get_warpedTimeSeriesModel(
     mwr_v: float = 3.1,
     original_template_version: Optional[str] = None,
     version: Optional[str] = None,
+    phase_lim: Optional[tuple[float, float]] = None,
     use_host_dust: bool = True,
     use_mw_dust: bool = False,
     sample_color_amplitude =None,
@@ -206,6 +209,8 @@ def get_warpedTimeSeriesModel(
         Version of the base template.
     version : str, optional
         Version label for the warped source.
+    phase_lim: tuple of float, optional
+        Optional (min_phase, max_phase) limits to apply to the warped source.        
     use_host_dust : bool, optional (default=True)
         Whether to include host galaxy dust (rest frame).
     use_mw_dust : bool, optional (default=False)
@@ -302,6 +307,7 @@ def get_warpedTimeSeriesModel(
         phase=phase,
         wave=wave,
         flux=flux,
+        phase_lim=phase_lim,
         original_template_name=original_template_name,
         original_template_version=original_template_version,
         time_spline_degree=3,

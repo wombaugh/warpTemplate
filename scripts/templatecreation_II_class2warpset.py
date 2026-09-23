@@ -94,9 +94,9 @@ DEFAULT_ALT_CSV = "/Users/jnordin/data/ztf/dr4/dr4_slsntde_coordlist.csv"
 DEFAULT_ALT_MONGODB = "bts_ipacfp_strictbase_slsntns"
 
 # Selection parameters
-MIN_BANDS = 2
-MIN_PEAK_NDOF = 3
-REQUIRE_PEAK_GOOD = False
+#MIN_BANDS = 2
+#MIN_PEAK_NDOF = 3
+#REQUIRE_PEAK_GOOD = False
 CHIDOF_MAX = 6
 
 # Error model
@@ -107,6 +107,7 @@ FLUX_FRAC_DISPERSION = 0.02
 TEMPLATE_COUNT = 5
 MIN_DRAW_PROB = 10**-99.    # Looks small, but thats how xchi2 survival function scales with this data
 GOOD_WARPFIT_SF = 0.5
+MAX_COLOR = 2.0 
 
 # Fit properties for warped model
 # Note that hostebv is not included - it should be absorbed into the warp correction 
@@ -116,6 +117,9 @@ FITPROP = ["t0", "amplitude"]
 MAX_PHASES = {
     "SN IIP": {'n':[-20,150]},
 }
+
+# Pipeline parameters
+INCLUDE_SIGMA = 3
 
 
 # ─── SLSN / TDE alternate catalog (matching the first pipeline stage) ───────
@@ -752,7 +756,7 @@ def process_single_sn(
             row["id"],
             db,
             redshift=float(row["z"]),
-            include_sigma=5,
+            include_sigma=INCLUDE_SIGMA,
             type=row["class"],
         )
         # Remove points after first gap > 20 days
@@ -791,11 +795,11 @@ def process_single_sn(
                 original_template_version=None,
             )
         except ValueError as e:
-            print(f"Failed to create warped model for {row['id']} with {row['model']}: {e}")
-            print('... skipping and continuing')
+#            print(f"Failed to create warped model for {row['id']} with {row['model']}: {e}")
+#            print('... skipping and continuing')
             continue
         if wm is None:
-            print(f"Failed to create warped model for {row['id']} with {row['model']}")
+#            print(f"Failed to create warped model for {row['id']} with {row['model']}")
             continue
 
         # We now evaluate how well the warped model match the data 
@@ -824,11 +828,24 @@ def process_single_sn(
             continue
         if (tab["time"][fitted_time_mask].max() - tab['time'][fitted_time_mask].min()) < 20:
             continue
+        # We record the min and max phase of the data used for the fit, relative to the fitted peak, as this can be used to limit predictions.
+        row["fit_phase_min"] = tab["time"][fitted_time_mask].min() - t0
+        row["fit_phase_max"] = tab["time"][fitted_time_mask].max() - t0
 
         # Assess fit quality. 
         row["sf"] = chi2.sf(wresult["chisq"], wresult["ndof"])
         chicomp["prechi"].append(row["chidof"])
         chicomp["postsf"].append(row["sf"])
+
+        # Check model peak color for unphysicality - some SLSN have very weird values
+        wfitted_model.set(z=0)
+        colt0 = wfitted_model.source.peakphase('ztfg') + t0
+        col_gr = wfitted_model.bandmag('ztfg', 'ab', colt0) - wfitted_model.bandmag('ztfr', 'ab', colt0)
+        wfitted_model.set(z=float(row["z"]))
+        if abs(col_gr) > MAX_COLOR:
+            print('XXX skip due to color!... model peak color g-r', col_gr, row['id'], row["model"], row["sf"], wresult["chisq"] / wresult["ndof"], t0, colt0)
+            continue
+
 
         row["mdict"] = mdict
         row["wresult"] = wresult
@@ -876,12 +893,9 @@ def process_single_sn(
             #raise ValueError('Failed to make plot')
 
         if fiteval in ['poor', 'var']:
-            print('... reject fit', fiteval, row["sf"], wresult["chisq"] / wresult["ndof"])
+#            print('... reject fit', fiteval, row["sf"], wresult["chisq"] / wresult["ndof"])
             continue
 
-#        if row["sf"] < min_draw_prob or (wresult["chisq"] / wresult["ndof"])>max_chi_dof:
-#            print('... fit sf below min_draw_prob, skipping ', row["sf"], wresult["chisq"] / wresult["ndof"])
-#            continue
         if row["sf"] > good_warpfit_sf:
             goodfits += 1
 
@@ -904,7 +918,6 @@ def process_single_sn(
         print(f"No template fits for {id_value}")
         return None
 
-    print(len(sn_warplist), len(ordered))
 
     # Normalize drawing probabilities
     drawprobs = apply_floor_and_normalize(
@@ -930,8 +943,8 @@ def parse_args():
         type=int, default=11, help="Class index to process")
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 5),
-        help='Version string for input and output files (default: $VERSION or 5)'
+        default=os.environ.get('VERSION', 6),
+        help='Version string for input and output files (default: $VERSION or 6)'
     )
     parser.add_argument(
         "--fit-host-dust", action="store_true", default=True,
@@ -1046,7 +1059,7 @@ def main():
             db_alt=db_alt,
             fit_host_dust=args.fit_host_dust,
             close_templates=close_templates,
-            max_phases=args.max_phases if hasattr(args, 'max_phases') else None,
+            max_phases=args.max_phases if hasattr(args, 'max_phases') else max_phases,
             template_count=TEMPLATE_COUNT,
             min_draw_prob=MIN_DRAW_PROB,
             max_chi_dof=CHIDOF_MAX,
