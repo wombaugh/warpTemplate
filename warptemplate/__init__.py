@@ -14,6 +14,7 @@ from .warpdatatypes import TemplateCorrectionResult, FitLCResult
 from .taxonomy import add_warpclasses, TEMPLATE_CLOSE_TYPES, SN_REJECT
 from .peakfitting_gp import estimate_peak_flux_multiband, get_peak_colors
 from .openuniverse_registry import register_all, get_registered_names 
+from .skysurvey_bridge import WarpTemplatePopulation
 
 __all__ = [
     "WarpedTimeSeriesSource",

@@ -17,6 +17,57 @@ _QUALITY_RANK = {
     "gold": 2,
 }
 
+# -----------------------------------------------------------------------------
+# Random draws from the fitted offset+scatter color model ("offsetfit_draw")
+# -----------------------------------------------------------------------------
+# Mirrors the AV_DISTRIBUTIONS convention from fit_offset_extinction_v2.py:
+# both families are SCALE families (mean/spread set entirely by `scale`),
+# parametrized in A_V (mag) -- matching what that fit reports as
+# fit_result.av_dist / fit_result.av_scale, so those can be passed straight
+# through as dist / av_scale below.
+#
+# NOTE: despite the historical name, this has nothing to do with sncosmo's
+# CCM89Dust / actual Milky Way extinction -- it draws a random A_V-like
+# value and converts it to a *peak-color* shift via dcolor_dav (the
+# color-change-per-unit-A_V slope fit_offset_extinction_v2.py already
+# computed for this band pair, via Fitzpatrick99 at the bands' effective
+# wavelengths), then adds the fitted delta_c baseline. The result is a
+# target peak color, fed into the same `_color_correction_ebv`/`color_poly`
+# pathway as "harmonize"/"draw"/"target" -- it is a variant of color_mode
+# "draw" using the class's fitted offset+scatter model instead of its raw
+# native-color distribution, not a separate dust-extinction mechanism. If
+# genuine Milky Way dust is ever wanted, that's `use_mw_dust`/`mwebv=` on
+# get_warpedTimeSeriesModel instead, which this does not touch.
+
+OFFSETFIT_AV_DISTRIBUTIONS = {
+    'exponential': lambda rng, scale: rng.exponential(scale=scale),
+    'halfnormal':  lambda rng, scale: abs(rng.normal(loc=0.0, scale=scale)),
+}
+
+
+def draw_offsetfit_peak_color(dist: str, av_scale: float, dcolor_dav: float,
+                               color_zeropoint: float,
+                               rng: Optional[np.random.Generator] = None) -> float:
+    """Draw a single target peak color from a class's fitted offset+scatter
+    color model (color_mode="offsetfit_draw").
+
+    `dist` / `av_scale` should match whatever fit_offset_extinction_v2.py
+    reported (av_dist / av_scale there) for this class's color pair, and
+    are in A_V-like units (mag). `dcolor_dav` is that same fit's
+    color-change-per-unit-A_V slope for this band pair (already encodes
+    whatever R_V the fit assumed -- there is no separate R_V here), so the
+    draw is converted directly to a color-space shift: no E(B-V) or
+    CCM89Dust involved anywhere in this path.
+    """
+    if dist not in OFFSETFIT_AV_DISTRIBUTIONS:
+        raise ValueError(f"dist must be one of {list(OFFSETFIT_AV_DISTRIBUTIONS)}, got {dist!r}")
+    if rng is None:
+        rng = np.random.default_rng()
+    av_draw = OFFSETFIT_AV_DISTRIBUTIONS[dist](rng, av_scale)
+    return float(av_draw) * dcolor_dav + color_zeropoint
+
+
+
 
 class WarpfitTemplateLoader:
     """
@@ -88,21 +139,39 @@ class WarpfitTemplateLoader:
                 # ... further SNe
             },
             
-            "model_colors": {                 # Peak color distribution of class (optional)
-                "gamma": -0.234,
-                "delta": 1.456,
-                "loc": 0.125,
-                "scale": 0.151,
-                "color1": "ztfg",
-                "color2": "ztfr",
-                'linear_corr': {
-            'type': 'LinearDust',
-            'coeffs': list(coeffs),  # [slope, 0.0]
-            'lambda_0': 6250.,
-            'dc_da_mean': float(dfcol['dc_da'].mean()),
-            'dc_da_std': float(dfcol['dc_da'].std()),
-        },
-            }
+            "model_colors": {
+                'color1': 'ztfg',
+                'color2': 'ztfr',
+                'emg': {'K': np.float64(0.47560474926094615),
+                'loc': np.float64(-0.027584443383387745),
+                'scale': np.float64(0.2777751017084096),
+                'type': 'exponnorm'},
+                'linear_corr': {'type': 'LinearDust',
+                'coeffs': [np.float64(-4.038045179953404), np.float64(0.0)],
+                'lambda_0': 6250.0,
+                'dc_da_mean': -0.25281153049389066,
+                'dc_da_std': 0.011757804164962037},
+                'offset_extinction_corr': {'av_dist': 'exponential',
+                'delta_c_bounds': [-1.0, 1.0],
+                'av_scale_bounds': [0.0, 2.0],
+                'colors': {'ztfg-ztfr': {'color': 'ztfg-ztfr',
+                    'delta_c': -0.244782259238491,
+                    'av_scale': 0.8789663791903275,
+                    'av_dist': 'exponential',
+                    'av_mean': 0.8789663791903275,
+                    'dcolor_dav': 0.39562545069212507,
+                    'ks_stat': 0.018193146072606803,
+                    'ks_pvalue': 0.9616656456300157,
+                    'baseline_ks': 0.26953854234527697,
+                    'baseline_pvalue': 1.741684525084477e-48,
+                    'success': True,
+                    'nfev': 61,
+                    'obs_mean': 0.2520259749348755,
+                    'obs_std': 0.4805574505658401,
+                    'model_mean': 0.24460515803144633,
+                    'model_std': 0.4328944722712748,
+                    'n_sn': 748}}}}
+                            }
         }
     Each `mdict` must match the expected input of
     `get_warpedTimeSeriesModel`.
@@ -214,12 +283,42 @@ class WarpfitTemplateLoader:
         self._cache[key]["warpcoeff"] = warpcoeff
 
     def update_model_colors(self, fitclass: str, model_colors: Dict[str, Any]) -> None:
-        """Update cached model colors metadata."""
+        """Update cached model colors metadata, merging with any existing entry.
+
+        If a "model_colors" entry already exists for this fitclass, `model_colors`
+        is merged into it rather than replacing it outright: existing keys not
+        present in the new dict are kept, new keys are added, and colliding keys
+        are merged recursively if both sides are dicts (so e.g. updating one
+        color pair's stats doesn't wipe out another color pair's stats sitting
+        next to it), otherwise the new value wins.
+        """
         key = re.sub(r"/", "", fitclass)
         if key not in self._cache:
             self._load_coeffs(fitclass)
-        self._cache[key]["model_colors"] = model_colors
 
+        existing = self._cache[key].get("model_colors")
+        if isinstance(existing, dict) and isinstance(model_colors, dict):
+            self._cache[key]["model_colors"] = self._deep_merge_dicts(existing, model_colors)
+        else:
+            # Nothing there yet (or one side isn't a dict) -- nothing to preserve.
+            self._cache[key]["model_colors"] = model_colors
+
+    @staticmethod
+    def _deep_merge_dicts(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge `update` into a copy of `base` (neither input is mutated).
+
+        Values in `update` win on key collisions, except where both the existing
+        and new value are themselves dicts -- those are merged recursively
+        instead of the new one replacing the old one wholesale.
+        """
+        merged = dict(base)
+        for k, v in update.items():
+            if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
+                merged[k] = WarpfitTemplateLoader._deep_merge_dicts(merged[k], v)
+            else:
+                merged[k] = v
+        return merged
+    
     def save_class(self, fitclass: str, filepath: Optional[str] = None) -> str:
         """
         Persist cached data for a class to disk.
@@ -265,11 +364,11 @@ class WarpfitTemplateLoader:
         if mode == "none":
             return None
 
-        allowed = {"harmonize", "draw", "target", "mwdust"}
+        allowed = {"harmonize", "draw", "target", "offsetfit_draw"}
         if mode not in allowed:
             raise ValueError(
                 f"Invalid color_mode: {color_mode}. "
-                "Must be one of None, 'none', 'harmonize', 'draw', 'target', 'mwdust'."
+                "Must be one of None, 'none', 'harmonize', 'draw', 'target', 'offsetfit_draw'."
             )
         return mode
 
@@ -329,12 +428,6 @@ class WarpfitTemplateLoader:
         random_seed: Optional[int] = None,
         color_mode: Optional[str] = None,
         target_peak_color: Optional[float] = None,
-        mwebv_dist: Optional[str] = None,
-        mwebv_av_scale: Optional[float] = None,
-        mwr_v: float = 3.1,
-        delta_c: Optional[float] = None,
-        delta_c_band1: Optional[str] = None,
-        delta_c_band2: Optional[str] = None,
     ) -> List[Dict]:
         """
         Load, filter, and sample warped templates as `sncosmo.Model` objects.
@@ -382,38 +475,18 @@ class WarpfitTemplateLoader:
             - "harmonize": warp to class median peak color
             - "draw": draw peak color from observed distribution
             - "target": warp to specified `target_peak_color`
-            - "mwdust": same peak-color targeting as "harmonize" (this mode
-              is meant to sit *on top of* the harmonized baseline, since
-              that's what fit_offset_extinction_v2.py's delta_c/av_scale
-              were fit against), PLUS a per-template random Milky-Way-like
-              extinction draw and, optionally, a fitted color-offset tilt.
-              Requires `mwebv_dist` and `mwebv_av_scale`; `delta_c` (with
-              `delta_c_band1`/`delta_c_band2`) is optional.
+            - "offsetfit_draw": draw a target peak color from the class's
+                fitted offset+scatter color model (the delta_c/av_scale fit
+                from fit_offset_extinction_v2.py), i.e. the class's fitted
+                color baseline plus a random draw from its fitted A_V-like
+                scatter distribution, converted to a color shift via
+                dcolor_dav. A variant of "draw" using that fitted model
+                instead of the raw native-color distribution -- it does not
+                apply any actual Milky Way dust effect (see
+                draw_offsetfit_peak_color).
 
         target_peak_color : float, optional
             Peak color to use when `color_mode="target"`.
-
-        mwebv_dist : {'exponential', 'halfnormal'}, optional
-            Required when `color_mode="mwdust"`. Family for the per-template
-            A_V draw -- matches `fit_result.av_dist` from
-            fit_offset_extinction_v2.py.
-        mwebv_av_scale : float, optional
-            Required when `color_mode="mwdust"`. Scale (in A_V, mag) for
-            `mwebv_dist` -- matches `fit_result.av_scale`.
-        mwr_v : float, optional (default=3.1)
-            R_V used both for the MW dust effect and for converting
-            `mwebv_av_scale` (A_V) to E(B-V). Keep consistent with whatever
-            R_V the fit assumed.
-        delta_c : float, optional
-            A fitted global color offset (mag) to apply to every template in
-            "mwdust" mode -- matches `fit_result.delta_c`. Unlike the A_V
-            draw, this is a FIXED shift (the fit only returns a point
-            estimate, not a distribution) applied identically to every
-            template, alongside its own independent A_V draw.
-        delta_c_band1, delta_c_band2 : str, optional
-            The band pair `delta_c` was fit against, e.g. 'ztfg'/'ztfr' for
-            a color key of "ztfg-ztfr". Required together whenever
-            `delta_c` is set.
 
         Returns
         -------
@@ -430,8 +503,6 @@ class WarpfitTemplateLoader:
                 "target_peak_color": float,
                 "samplecorr_ebv": float,
                 "model_colors": dict,
-                "mwebv_drawn": float or None,       # "mwdust" mode only
-                "delta_c_applied": float or None,   # "mwdust" mode only
             }
 
         Notes
@@ -448,19 +519,6 @@ class WarpfitTemplateLoader:
         if color_mode == "target" and target_peak_color is None:
             raise ValueError("target_peak_color must be provided when color_mode='target'")
 
-        if color_mode == "mwdust":
-            if mwebv_dist is None or mwebv_av_scale is None:
-                raise ValueError(
-                    "mwebv_dist and mwebv_av_scale must both be provided when "
-                    "color_mode='mwdust' (e.g. fit_result.av_dist / "
-                    "fit_result.av_scale from fit_offset_extinction_v2.py)."
-                )
-            if (delta_c_band1 is None) != (delta_c_band2 is None):
-                raise ValueError("delta_c_band1 and delta_c_band2 must be given together.")
-            if delta_c is not None and delta_c_band1 is None:
-                raise ValueError(
-                    "delta_c_band1 and delta_c_band2 are required whenever delta_c is set."
-                )
 
         # -------------------------
         # Local RNG (reproducible)
@@ -474,6 +532,7 @@ class WarpfitTemplateLoader:
         template_collection = self._load_coeffs(fitclass)
         warpcoeff = template_collection["warpcoeff"]
         model_colors = template_collection.get("model_colors")
+#        print(model_colors)
 
         if color_mode is not None:
             model_colors = self._validate_model_colors(model_colors)
@@ -500,6 +559,29 @@ class WarpfitTemplateLoader:
             color_poly = None
             color_distribution = None
             color_pivot = None
+
+        if color_mode == "offsetfit_draw":
+            # Here we need to grab additional parameters for the fitted
+            # offset+scatter color model. Brute force first - assume these
+            # to be present in the pickle.
+            # Todo: gracefully check whether these exist, possibly as part of model color validate
+            colname = '{}-{}'.format(model_colors['color1'], model_colors['color2'])
+            if not colname in model_colors['offset_extinction_corr']['colors']:
+                raise ValueError(
+                                    "Color mismatch between whats available from offset_extinction corr and linear corretion."
+                                )
+            offsetfit_kwargs = {
+                'dist': model_colors['offset_extinction_corr']['av_dist'], 
+                'av_scale': model_colors['offset_extinction_corr']['colors'][colname]['av_scale'], 
+                'dcolor_dav': model_colors['offset_extinction_corr']['colors'][colname]['dcolor_dav'], 
+                'color_zeropoint':  float(color_distribution.median()) + model_colors['offset_extinction_corr']['colors'][colname]['delta_c'], 
+                'rng': np_rng,
+            }
+            print('... initialized offsetfit_draw color model from:', offsetfit_kwargs)
+
+
+
+
 
         # -------------------------
         # Limit to quality requirement 
@@ -581,8 +663,10 @@ class WarpfitTemplateLoader:
                     )
                     continue
 
-                if color_mode in ("harmonize", "mwdust"):
+                if color_mode == "harmonize":
                     applied_target_peak_color = float(color_distribution.median())
+                elif color_mode == "offsetfit_draw":
+                    applied_target_peak_color = draw_offsetfit_peak_color(**offsetfit_kwargs)
                 elif color_mode == "draw":
                     applied_target_peak_color = float(
                         color_distribution.rvs(random_state=np_rng)
@@ -601,18 +685,6 @@ class WarpfitTemplateLoader:
                     )
 #                    print(f"Color mode {color_mode}: applied_target_peak_color={applied_target_peak_color}, samplecorr_ebv={samplecorr_ebv}")
 
-                mwdust_kwargs = {}
-                if color_mode == "mwdust":
-                    mwdust_kwargs = dict(
-                        use_mw_dust=True,
-                        mwebv_dist=mwebv_dist,
-                        mwebv_av_scale=mwebv_av_scale,
-                        mwr_v=mwr_v,
-                        delta_c=delta_c,
-                        delta_c_band1=delta_c_band1,
-                        delta_c_band2=delta_c_band2,
-                        rng=np_rng,
-                    )
 
                 # Potential phase limits to apply
                 if phase_buffer is not None:
@@ -623,6 +695,7 @@ class WarpfitTemplateLoader:
                     phase_lim = None
 
                 try:
+#                    print(model_colors)
                     model = get_warpedTimeSeriesModel(
                         name=f"{sn_name}_{template_sn or 'tpl'}",
                         original_template_name=template_sn,
@@ -636,7 +709,6 @@ class WarpfitTemplateLoader:
                             model_colors["color1"],
                             model_colors["color2"],
                         ] if model_colors else None,
-                        **mwdust_kwargs,
                     )
                 except Exception as e:
                     self.logger.error(
@@ -656,8 +728,6 @@ class WarpfitTemplateLoader:
                     "target_peak_color": applied_target_peak_color,
                     "samplecorr_ebv": samplecorr_ebv,
                     "model_colors": dict(model_colors) if model_colors else None,
-                    "mwebv_drawn": model.get('mwebv') if color_mode == "mwdust" else None,
-                    "delta_c_applied": delta_c if color_mode == "mwdust" else None,
                 })
 
             if not possible_templates:
