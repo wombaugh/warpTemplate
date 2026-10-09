@@ -28,7 +28,9 @@ their SLSNI_Chen23 source), 0 dropped.
 
 All alt-source rows -- BTS-sourced and literature-sourced (TDE_Yao23,
 SLSNI_Chen23, SLSNII_Pessi25) alike -- are confirmed to live in the same
---alt-mongodb, so get_class_database() doesn't need per-`source` routing.
+--alt-mongodb.
+
+Photometry is searched for in order according to --mongodbs.
 
 The catalog has no A_V or peakmag columns -- filled with 0.0 / NaN with a
 printed warning. It DOES have RAdeg/Decdeg, so if you want real Milky Way
@@ -99,6 +101,9 @@ _TDE_TYPE_VARIANTS = {
     'TDE', 'TDE-H-He', 'TDE-He', 'TDE-featureless', 'TDE-H+He', 'TDE-H+He?',
 }
 
+def _env_list(var, default):
+    val = os.environ.get(var)
+    return [v.strip() for v in val.split(',') if v.strip()] if val else default
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -138,13 +143,23 @@ def parse_args():
     )
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 'v6'),
-        help='Version string for output files and log (default: $VERSION or v6)'
+        default=os.environ.get('VERSION', 'v8'),
+        help='Version string for output files and log (default: $VERSION or v8)'
     )
     parser.add_argument(
-        '--mongodb',
-        default=os.environ.get('MONGODB', 'bts_ipacfp_strictbase_train_jul26'),
-        help='MongoDB database name (default: $MONGODB or bts_ipacfp_strictbase_train_jul26)'
+        '--mongodbs',
+        nargs='+',
+        default=_env_list('MONGODBS', [
+            'bts_ipacfp_strictbase_train_jul26',
+            'bts_ipacfp_strictbase_slsntns',
+            'dr4dr3ipac_parsnip',
+            'bts_ipacfp_strictbase',
+            'dr4bts_parsnip',
+        ]),
+        help='Ordered list of MongoDB databases to search for photometry. '
+             'Each SN is looked up in turn and the search stops at the first '
+             'database that returns data (default: $MONGODBS, comma-separated, '
+             'or the two databases above)'
     )
     parser.add_argument(
         '--alt-csv',
@@ -153,12 +168,8 @@ def parse_args():
              'Decdeg, source), used for SLSN-I, SLSN-II, and TDE '
              '(default: $ALT_CSV or /Users/jnordin/...)'
     )
-    parser.add_argument(
-        '--alt-mongodb',
-        default=os.environ.get('ALT_MONGODB', 'bts_ipacfp_strictbase_slsntns'),
-        help='Alternate MongoDB database used for SLSN-I, SLSN-II, and TDE '
-             '(default: $ALT_MONGODB or ztf_slsn_tde_photometry)'
-    )
+    parser.add_argument("--use-z-limits", dest="use_z_limits", action="store_true", default=True)
+    parser.add_argument("--no-z-limits", dest="use_z_limits", action="store_false")
 
     return parser.parse_args()
 
@@ -253,36 +264,52 @@ def load_class_dataframe(classname: str, args: argparse.Namespace) -> pd.DataFra
     return df
 
 
-def get_class_database(classname: str, args: argparse.Namespace, client: pymongo.MongoClient):
-    """Pick --mongodb or --alt-mongodb depending on the class.
+def get_databases(dbnames, client):
+    """Return an ordered list of (name, database) handles.
 
-    All alt-source rows (BTS-sourced and literature-sourced alike) live in
-    the same --alt-mongodb, confirmed -- no per-`source` routing needed.
+    pymongo creates databases lazily, so a misspelled name would silently
+    return empty results. Warn if a requested database does not exist.
     """
-    dbname = args.alt_mongodb if classname in ALT_SOURCE_CLASSES else args.mongodb
-    print(f"Using MongoDB database '{dbname}' for class '{classname}'")
-    return getattr(client, dbname)
+    existing = set(client.list_database_names())
+    dbs = []
+    for dbname in dbnames:
+        if dbname not in existing:
+            print(f"WARNING: database '{dbname}' not found on server; "
+                  f"it will never return data.")
+        dbs.append((dbname, client[dbname]))
+    print('Photometry search order:', [n for n, _ in dbs])
+    return dbs
 
 
-def get_db_table(name, database, tabulators=[]):
-    """For ZTF name, get photopoints and then tables."""
-    if isinstance(name, int):
+def get_db_table(name, databases, tabulators=[]):
+    """For ZTF name, search each database in order and return
+    (flux_table, dbname) from the first one with usable photometry.
+    Returns (None, None) if no database has data."""
+    if isinstance(name, (int, np.integer)):
         print('Assuming name given as stock')
-        stock = int
+        stock = int(name)
     elif re.search('ZTF', name):
         stock = ZTFIdMapper.to_ampel_id(name)
     else:
         print('Cannot parse', name)
-        return None
+        return None, None
 
-    dps = [dp for dp in database.t0.find({'stock': stock})]
+    for dbname, database in databases:
+        dps = list(database.t0.find({'stock': stock}))
+        if not dps:
+            continue
 
-    ftables = []
-    for tabulator in tabulators:
-        ftables.append(tabulator.get_flux_table(dps))
-    if len(ftables) > 1:
-        print('Implement astropy table appending!')
-    return ftables.pop(0)
+        ftables = [tabulator.get_flux_table(dps) for tabulator in tabulators]
+        if len(ftables) > 1:
+            print('Implement astropy table appending!')
+        table = ftables[0] if ftables else None
+
+        # Datapoints can exist but yield an empty table after tabulator cuts,
+        # in which case we keep looking in the next database.
+        if table is not None and len(table) > 0:
+            return table, dbname
+
+    return None, None
 
 def get_mw_extinction_av(row, allow_missing=False, R_V=3.1):
     """
@@ -373,37 +400,41 @@ def main():
     print('doing fits for', nclasses[classid])
 
     # Analysis and output
-    zclass = {
-        # These are v-3-5 limits used, for unclear reasons changed from initial guesses. 
-#        'SLSN-II': [0.0, 0.5],
-#        'SLSN-I': [0.0, 0.7],
-#        'SN Ia-91bg': [0.01, 0.055],
-#        'SN Ia-91T': [0.01, 0.10],
-#        'SN Ia-CSM': [0.01, 0.10],
-#        'SN IIn': [0.0, 0.10],
-#        'SN Ia-SC': [0.01, 0.10],
-#        'SN Ia-pec': [0.01, 0.055],
-#        'SN Iax': [0.0, 0.055],
-#        'TDE': [0.0, 0.55],
-        # Updated to agree with the original limits (for confirmation)
-        'SLSN-II': [0.0, 0.3],
-        'SLSN-I': [0.0, 0.3],
-        'SN Ia-91bg': [0.0, 0.055],
-        'SN Ia-91T': [0.0, 0.1],
-        'SN Ia-CSM': [0.0, 0.1],
-        'SN IIn': [0.0, 0.10],
-        'SN Ia-SC': [0.0, 0.1],
-        'SN Ia-pec': [0.0, 0.055],
-        'SN Iax': [0.0, 0.055],
-        'TDE': [0.0, 0.3],
-        'SN Ibn': [0.0, 0.055],
-        'SN Ic-BL': [0.0, 0.055],
-    }
-    # Aug / Sep values 
-    # zlim = zclass.get(nclasses[classid], [0.0, 0.07])
-    # Reset Sep 17 
-    zlim = zclass.get(nclasses[classid], [0.0, 0.04])
-    print('Using {} z lim.'.format('specific' if nclasses[classid] in zclass else 'default'))
+    if args.use_z_limits:
+        zclass = {
+            # These are v-3-5 limits used, for unclear reasons changed from initial guesses. 
+    #        'SLSN-II': [0.0, 0.5],
+    #        'SLSN-I': [0.0, 0.7],
+    #        'SN Ia-91bg': [0.01, 0.055],
+    #        'SN Ia-91T': [0.01, 0.10],
+    #        'SN Ia-CSM': [0.01, 0.10],
+    #        'SN IIn': [0.0, 0.10],
+    #        'SN Ia-SC': [0.01, 0.10],
+    #        'SN Ia-pec': [0.01, 0.055],
+    #        'SN Iax': [0.0, 0.055],
+    #        'TDE': [0.0, 0.55],
+            # Updated to agree with the original limits (for confirmation)
+            'SLSN-II': [0.0, 0.3],
+            'SLSN-I': [0.0, 0.3],
+            'SN Ia-91bg': [0.0, 0.055],
+            'SN Ia-91T': [0.0, 0.1],
+            'SN Ia-CSM': [0.0, 0.1],
+            'SN IIn': [0.0, 0.10],
+            'SN Ia-SC': [0.0, 0.1],
+            'SN Ia-pec': [0.0, 0.055],
+            'SN Iax': [0.0, 0.055],
+            'TDE': [0.0, 0.3],
+            'SN Ibn': [0.0, 0.055],
+            'SN Ic-BL': [0.0, 0.055],
+        }
+        # Aug / Sep values 
+        # zlim = zclass.get(nclasses[classid], [0.0, 0.07])
+        # Reset Sep 17 
+        zlim = zclass.get(nclasses[classid], [0.0, 0.04])
+        print('Using {} z lim.'.format('specific' if nclasses[classid] in zclass else 'default'))
+    else:
+        zlim = [0, 1000]
+        print('Not using redshift limits.')
 
 
 
@@ -434,7 +465,7 @@ def main():
     tabulators = [ZTFFPTabulator(inclusion_sigma=include_sigma)]
 
     client = pymongo.MongoClient()
-    db = get_class_database(nclasses[classid], args, client)
+    databases = get_databases(args.mongodbs, client)
 
     to_reject = []
     [to_reject.extend(l) for key, l in SN_REJECT.items()]
@@ -522,11 +553,13 @@ def main():
             #continue
 
 
-        tab = get_db_table(name, database=db, tabulators=tabulators)
-        tab.sort('time')
-        if len(tab) == 0:
+        tab, photdb = get_db_table(name, databases=databases, tabulators=tabulators)
+        if tab is None:
+            print('... no photometry found in any database')
             failkey.append(2)
             continue
+        tab.sort('time')
+        print('... photometry from', photdb)
 
         bands = len(set(tab['band']))
         if bands < 2:
@@ -622,6 +655,7 @@ def main():
             mdict['peakmag'] = row['peakmag']
             mdict['chidof'] = result.chisq / result.ndof
             mdict['id'] = name
+            mdict['photdb'] = photdb
             mdict['nbr_bands'] = bands
             mdict['ndet'] = len(tab)
             mdict['class'] = modelpar['class']

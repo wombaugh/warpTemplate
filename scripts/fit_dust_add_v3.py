@@ -867,7 +867,7 @@ def build_parser() -> argparse.ArgumentParser:
     g_class.add_argument("--cid", type=int, default=11)
 
     parser.add_argument("--warpdir", type=Path,
-                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v6"))
+                        default=Path("/Users/jnordin/data/models/sncosmo/warpmod/v8"))
     parser.add_argument("--outdir", type=Path, default=Path("."))
     parser.add_argument("--fit-json-pattern", type=str,
                         default="/Users/jnordin/data/models/sncosmo/btsfitsv{version}_{class_name}.json")
@@ -875,7 +875,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-selection", default='all')
     parser.add_argument("--snbasis-selection", default="all")
     parser.add_argument("--random-seed", type=int, default=42)
-    parser.add_argument("--version", default="6")
+    parser.add_argument("--version", default="8")
     parser.add_argument("--suffix", default="")     #. "_col" in some previous versions  
 
     parser.add_argument("--rest_phase_mode", type=str, default='ztfg',

@@ -433,11 +433,17 @@ def compute_linear_correlations(
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """Simulate target colors and fit linear parameter 'a'. Returns (df_fits, coeffs)."""
     if FIT_MODE == 'emg':
+        print('fotmode', dist_kwargs)
         K, loc, scale = dist_kwargs.get('K', 1.0), dist_kwargs.get('loc', 0.0), dist_kwargs.get('scale', 0.5)
         emg_dist = exponnorm(K, loc=loc, scale=scale)
     elif FIT_MODE == 'johnsonsu':
         gamma, delta, loc, scale = dist_kwargs.get('gamma', 0.0), dist_kwargs.get('delta', 1.0), dist_kwargs.get('loc', 0.0), dist_kwargs.get('scale', 0.5)
         jsu_dist = johnsonsu(gamma, delta, loc=loc, scale=scale)
+
+    #print('check emgdist')
+    #target_colors = emg_dist.rvs(size=n_draws, random_state=random_state)
+    #print('targetcols', target_colors)
+
 
     colfits = []
 
@@ -491,15 +497,19 @@ def compute_linear_correlations(
         # Store: (template_index, modid, natcol, model, t0, dc_da, linearity_quality)
         valid_templates.append((k, modid, natcol, warped_model, t0, dc_da, quad_ratio))
 
-    # Outer progress bar: templates
-    template_iter = _get_progress_bar(
-        valid_templates,
-        desc=f"Linear fits ({class_name})",
-        total=len(valid_templates),
-        disable=disable_progress,
-    )
+    #print('valid templates', len(valid_templates))
+    #print(valid_templates[0])
 
-    for k, modid, natcol, warped_model, t0, dc_da, quad_ratio in template_iter:
+    # Outer progress bar: templates - hmm, does not work ...
+    #template_iter = _get_progress_bar(
+    #    valid_templates,
+    #    desc=f"Linear fits ({class_name})",
+    #    total=len(valid_templates),
+    #    disable=disable_progress,
+    #)
+
+    for k, modid, natcol, warped_model, t0, dc_da, quad_ratio in valid_templates:
+        #print(k, modid, FIT_MODE)
         # Analytic inversion: a = (target_col - natcol) / dc_da
         if FIT_MODE == 'emg':
             target_colors = emg_dist.rvs(size=n_draws, random_state=random_state + k)
@@ -532,6 +542,7 @@ def compute_linear_correlations(
             })
 
     dfcol = pd.DataFrame(colfits)
+    print('got cols', dfcol)
 
     # Fit: a vs dcolor — should be perfectly linear: a = dcolor / dc_da
     # Average slope across templates, or fit global relation
@@ -670,7 +681,7 @@ def run_analysis(args: argparse.Namespace) -> dict:
 
     # Linear color correlations
     dfcol, coeffs = compute_linear_correlations(
-        templates, cols, peakphases, colband,
+        templates, cols, peakphases,     colband,
         class_name, args.toskip,
         n_draws=args.n_draws,
         disable_progress=args.no_progress,
@@ -796,7 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated band pair for color measurement"
     )
     g_analysis.add_argument(
-        "--version", default="6",
+        "--version", default="8",
         help="Warp model version suffix"
     )
     g_analysis.add_argument(

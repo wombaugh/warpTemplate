@@ -34,9 +34,8 @@ regardless of which source a given SN's data actually comes from. Milky
 Way A_V is computed the same way (via the SFD dust map, see
 get_mw_extinction_av) for every object regardless of source, so
 dereddening isn't split across two different conventions depending on
-which catalog an SN happens to be in. Photometry itself still comes from
-two separate MongoDB databases (--db-name for standard objects,
---alt-mongodb for alt-source ones), selected per-SN rather than per-run.
+which catalog an SN happens to be in. Photometry is searched across the 
+ordered --mongodbs list, using the first database that has data for each SN.
  
 Usage:
     python templatecreation_II_class2warpset.py --classwidth w --cid 3
@@ -91,7 +90,15 @@ DEFAULT_BTS_FILE = "/Users/jnordin/data/ztf/bts/bts_explorer_260601.csv"
 DEFAULT_FDIR = "/Users/jnordin/data/models/sncosmo/"
 DEFAULT_OUTDIR = "/Users/jnordin/data/models/sncosmo/warpmod/"
 DEFAULT_ALT_CSV = "/Users/jnordin/data/ztf/dr4/dr4_slsntde_coordlist.csv"
-DEFAULT_ALT_MONGODB = "bts_ipacfp_strictbase_slsntns"
+
+
+DEFAULT_MONGODBS = [
+    "bts_ipacfp_strictbase_train_jul26",
+    "bts_ipacfp_strictbase_slsntns",
+    "dr4dr3ipac_parsnip",
+    "bts_ipacfp_strictbase",
+    "dr4bts_parsnip",
+]
 
 # Selection parameters
 #MIN_BANDS = 2
@@ -123,8 +130,6 @@ INCLUDE_SIGMA = 3
 
 
 # ─── SLSN / TDE alternate catalog (matching the first pipeline stage) ───────
-
-ALT_SOURCE_CLASSES = {'SLSN-I', 'SLSN-II', 'TDE'}
 
 _TDE_TYPE_VARIANTS = {
     'TDE', 'TDE-H-He', 'TDE-He', 'TDE-featureless', 'TDE-H+He', 'TDE-H+He?',
@@ -544,54 +549,63 @@ def screen_model_gaps(data_table, model,
 
 # ─── Photometry retrieval ────────────────────────────────────────────────────
 
-def get_ztftable_from_ampel(
-    ztfid: str,
-    dbhandle,
-    include_sigma: float = 5.0,
-    **kwargs,
-):
-    """
-    Retrieve ZTF photometry from AMPEL database with outlier rejection.
-
-    Parameters
-    ----------
-    ztfid : str
-        ZTF identifier, e.g. 'ZTF18aaayemw'
-    dbhandle : pymongo.database.Database
-        AMPEL MongoDB handle
-    include_sigma : float
-        Sigma threshold for outlier rejection
-    **kwargs
-        Additional metadata for table
-
-    Returns
-    -------
-    astropy.table.Table
-        Sorted photometry table
-    """
-    tabulators = [ZTFFPTabulator(inclusion_sigma=include_sigma)]
-    tab = get_db_table(ztfid, database=dbhandle, tabulators=tabulators)
-    tab.sort("time")
-    tab.meta = {"object_id": ztfid, **kwargs}
-    return tab
+def get_databases(dbnames, client):
+    """Return an ordered list of (name, database) handles, warning about
+    names that do not exist on the server (pymongo creates them lazily)."""
+    existing = set(client.list_database_names())
+    dbs = []
+    for dbname in dbnames:
+        if dbname not in existing:
+            print(f"WARNING: database '{dbname}' not found on server; "
+                  f"it will never return data.")
+        dbs.append((dbname, client[dbname]))
+    print("Photometry search order:", [n for n, _ in dbs])
+    return dbs
 
 
-def get_db_table(name, database, tabulators):
-    """Retrieve photopoints and convert to table."""
-    if isinstance(name, int):
-        stock = name
+def get_db_table(name, databases, tabulators):
+    """Search each database in order; return (flux_table, dbname) from the
+    first one with usable photometry, or (None, None) if none has any."""
+    if isinstance(name, (int, np.integer)):
+        stock = int(name)
     elif re.search("ZTF", name):
         stock = ZTFIdMapper.to_ampel_id(name)
     else:
         raise ValueError(f"Cannot parse {name}")
 
-    dps = list(database.t0.find({"stock": stock}))
-    ftables = [tabulator.get_flux_table(dps) for tabulator in tabulators]
-
-    if len(ftables) > 1:
+    if len(tabulators) > 1:
         raise NotImplementedError("Multiple tabulators not supported")
-    return ftables[0]
 
+    for dbname, database in databases:
+        dps = list(database.t0.find({"stock": stock}))
+        if not dps:
+            continue
+        table = tabulators[0].get_flux_table(dps)
+        # Datapoints can exist but yield an empty table after tabulator
+        # cuts; in that case keep looking in the next database.
+        if table is not None and len(table) > 0:
+            return table, dbname
+
+    return None, None
+
+
+def get_ztftable_from_ampel(
+    ztfid: str,
+    databases,
+    include_sigma: float = 5.0,
+    **kwargs,
+):
+    """
+    Retrieve ZTF photometry, searching the ordered `databases` list and
+    stopping at the first with data. Returns None if no database has any.
+    """
+    tabulators = [ZTFFPTabulator(inclusion_sigma=include_sigma)]
+    tab, photdb = get_db_table(ztfid, databases=databases, tabulators=tabulators)
+    if tab is None:
+        return None
+    tab.sort("time")
+    tab.meta = {"object_id": ztfid, "photdb": photdb, **kwargs}
+    return tab
 
 def deredden_flux_table(table: Table, A_V: float, R_V: float = 3.1):
     """Correct photometry table for Milky Way extinction."""
@@ -697,8 +711,7 @@ def process_single_sn(
     id_value: str,
     group: pd.DataFrame,
     df_bts: pd.DataFrame,
-    db_standard,
-    db_alt,
+    databases,
     fit_host_dust: bool,
     close_templates: list,
     template_count: int,
@@ -723,11 +736,7 @@ def process_single_sn(
             print(f"NOTE: computed A_V={av:.3f} differs from catalog A_V={bts_row['A_V']:.3f} "
                   f"for {id_value}. Using computed value.")
 
-    # A single --classwidth/--cid run can mix standard and alt-source narrow
-    # classes (e.g. 'SN CC (a)' includes SLSN per WARP_MAP_ALL), so which
-    # database to query is decided per-SN here, from the same row already
-    # used for A_V, rather than once for the whole run.
-    db = db_alt if bts_row["type_n"] in ALT_SOURCE_CLASSES else db_standard
+
 
     # Priority: correct+good > correct > rest, then by chidof
     ordered = (
@@ -751,14 +760,16 @@ def process_single_sn(
         if re.search("salt", row["model"]):
             continue
 
-        # Retrieve and prepare photometry
         tab = get_ztftable_from_ampel(
             row["id"],
-            db,
+            databases,
             redshift=float(row["z"]),
             include_sigma=INCLUDE_SIGMA,
             type=row["class"],
         )
+        if tab is None:
+            print(f"No photometry found in any database for {row['id']}")
+            return None        
         # Remove points after first gap > 20 days
         tab =  truncate_after_gap(tab, 20)
 
@@ -906,6 +917,7 @@ def process_single_sn(
             row["quality"] = "silver"
         else:
             row["quality"] = "bronze"
+        row["photdb"] = tab.meta["photdb"]
 
         sn_warplist.append(row)
 
@@ -930,6 +942,9 @@ def process_single_sn(
 
 
 # ─── Argument parsing ────────────────────────────────────────────────────────
+def _env_list(var, default):
+    val = os.environ.get(var)
+    return [v.strip() for v in val.split(',') if v.strip()] if val else default
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract warp template coefficients")
@@ -943,8 +958,8 @@ def parse_args():
         type=int, default=11, help="Class index to process")
     parser.add_argument(
         '--version', '-v',
-        default=os.environ.get('VERSION', 6),
-        help='Version string for input and output files (default: $VERSION or 6)'
+        default=os.environ.get('VERSION', 8),
+        help='Version string for input and output files (default: $VERSION or 8)'
     )
     parser.add_argument(
         "--fit-host-dust", action="store_true", default=True,
@@ -954,15 +969,18 @@ def parse_args():
     parser.add_argument("--bts-file", default=DEFAULT_BTS_FILE)
     parser.add_argument("--fdir", default=DEFAULT_FDIR)
     parser.add_argument("--outdir", default=DEFAULT_OUTDIR)
-    parser.add_argument("--db-name", default="bts_ipacfp_strictbase_train_jul26")
+    parser.add_argument(
+        "--mongodbs", nargs="+",
+        default=_env_list("MONGODBS", DEFAULT_MONGODBS),
+        help="Ordered list of MongoDB databases to search for photometry. "
+             "Each SN is looked up in turn and the search stops at the first "
+             "database that returns data (default: $MONGODBS, "
+             "comma-separated, or the two databases above)"
+    )    
     parser.add_argument(
         "--alt-csv", default=os.environ.get('ALT_CSV', DEFAULT_ALT_CSV),
         help="Combined SLSN/TDE catalog CSV (ZTFID, type, redshift, RAdeg, "
              "Decdeg, source), same file the first pipeline stage uses"
-    )
-    parser.add_argument(
-        "--alt-mongodb", default=os.environ.get('ALT_MONGODB', DEFAULT_ALT_MONGODB),
-        help="MongoDB database for SLSN-I, SLSN-II, and TDE photometry"
     )
     return parser.parse_args()
 
@@ -1043,8 +1061,7 @@ def main():
     # Database connections -- standard and alt-source SLSN/TDE photometry
     # live in different databases; process_single_sn() picks per-SN.
     client = pymongo.MongoClient()
-    db_standard = getattr(client, args.db_name)
-    db_alt = getattr(client, args.alt_mongodb)
+    databases = get_databases(args.mongodbs, client)
 
     # Main warp fitting loop
     full_warplist = {}
@@ -1055,8 +1072,7 @@ def main():
             id_value=id_value,
             group=group,
             df_bts=df_bts,
-            db_standard=db_standard,
-            db_alt=db_alt,
+            databases=databases,
             fit_host_dust=args.fit_host_dust,
             close_templates=close_templates,
             max_phases=args.max_phases if hasattr(args, 'max_phases') else max_phases,
